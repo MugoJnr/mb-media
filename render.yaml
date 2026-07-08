@@ -18,4 +18,6 @@ services:
       - key: YTDLP_COOKIES_B64
         sync: false
       - key: YTDLP_COOKIES_FILE
-        value: /app/cookies/server.txt
+        value: /var/data/cookies/server.txt
+      - key: DATA_DIR
+        value: /var/data

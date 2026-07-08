@@ -19,7 +19,10 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me-in-production"
 
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=["120 per hour"])
 
-DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
+# Prefer persistent disk when mounted (Render Disk at /var/data).
+DATA_DIR = os.environ.get("DATA_DIR") or ("/var/data" if os.path.isdir("/var/data") else os.path.dirname(__file__))
+
+DOWNLOAD_DIR = os.environ.get("DOWNLOAD_DIR") or os.path.join(DATA_DIR, "downloads")
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
 FILE_TTL = 15 * 60  # seconds a finished file is kept before auto-delete
@@ -50,11 +53,11 @@ QUEUE_LOCK = threading.Lock()
 MAX_DURATION_SECONDS = int(os.environ.get("MAX_DURATION_SECONDS", 3 * 3600))  # 3 hours
 MAX_FILESIZE_MB = int(os.environ.get("MAX_FILESIZE_MB", 2000))  # 2 GB
 
-COOKIES_DIR = os.path.join(os.path.dirname(__file__), "cookies")
+COOKIES_DIR = os.path.join(DATA_DIR, "cookies")
 os.makedirs(COOKIES_DIR, exist_ok=True)
 SERVER_COOKIES_PATH = os.path.join(COOKIES_DIR, "server.txt")
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "analytics.db")
+DB_PATH = os.path.join(DATA_DIR, "analytics.db")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 CONTACT_TO_EMAIL = os.environ.get("CONTACT_TO_EMAIL")
