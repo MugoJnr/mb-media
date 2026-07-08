@@ -1,0 +1,239 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="hero">
+  <div class="container">
+    <span class="eyebrow">★ Free · No sign-up · No watermark</span>
+    <h1>Download Smarter.<br><span class="accent">Faster. Better.</span></h1>
+    <p class="tagline">Paste a link from any supported platform, preview it instantly, and save it in the format and quality you want.</p>
+
+    <div class="converge" id="downloader">
+      <div class="platform-orbit" aria-hidden="true">
+        <span class="glyph">▶</span>
+        <span class="glyph">♪</span>
+        <span class="glyph">◉</span>
+        <span class="glyph">𝕏</span>
+        <span class="glyph">f</span>
+      </div>
+
+      <div class="input-bar">
+        <input type="text" id="urlInput" placeholder="Paste a video link here…" autocomplete="off" aria-label="Video URL">
+        <button class="btn btn-gold" id="fetchBtn">Download</button>
+      </div>
+      <div class="action-row">
+        <button id="pasteBtn">📋 Paste</button>
+        <button id="clipboardDetectBtn">🔎 Auto-detect clipboard</button>
+      </div>
+      <div id="status" role="status" aria-live="polite"></div>
+    </div>
+
+    <!-- Skeleton loading state -->
+    <div class="preview-card" id="previewSkeleton" style="display:none; text-align:left;">
+      <div class="preview-top">
+        <div class="skeleton" style="width:130px; height:74px; border-radius:8px; flex-shrink:0;"></div>
+        <div style="flex:1;">
+          <div class="skeleton" style="height:14px; width:80%; margin-bottom:8px; border-radius:4px;"></div>
+          <div class="skeleton" style="height:10px; width:50%; border-radius:4px;"></div>
+        </div>
+      </div>
+      <div class="skeleton" style="height:36px; margin-top:16px; border-radius:8px;"></div>
+    </div>
+
+    <!-- Preview card -->
+    <div class="preview-card" id="previewCard">
+      <div class="preview-top">
+        <img id="pThumb" src="" alt="">
+        <div class="preview-meta">
+          <h3 id="pTitle"></h3>
+          <div class="sub" id="pSub"></div>
+        </div>
+      </div>
+      <div class="preview-stats" id="pStats"></div>
+
+      <div id="playlistPanel" style="display:none; margin-top:16px; border-top:1px solid var(--border); padding-top:14px;">
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:10px;">This is a playlist — select which videos to download:</p>
+        <div id="playlistEntries" style="max-height:220px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; margin-bottom:12px;"></div>
+        <button class="btn btn-gold btn-block" id="downloadBatchBtn">Download selected</button>
+      </div>
+
+      <div class="tabs" role="tablist">
+        <button class="tab active" data-tab="video" role="tab">Video</button>
+        <button class="tab" data-tab="audio" role="tab">Audio only</button>
+        <button class="tab" data-tab="extras" role="tab">Extras</button>
+      </div>
+
+      <div class="tab-panel active" data-panel="video">
+        <select id="videoQuality" aria-label="Video quality"></select>
+        <div id="videoSizeHint" style="font-size:0.78rem; color:var(--muted); margin:-4px 0 10px;"></div>
+        <button class="btn btn-gold btn-block" id="downloadVideoBtn">Download video</button>
+      </div>
+      <div class="tab-panel" data-panel="audio">
+        <select id="audioQuality" aria-label="Audio quality">
+          <option value="320">320 kbps (best)</option>
+          <option value="256">256 kbps</option>
+          <option value="192" selected>192 kbps</option>
+          <option value="128">128 kbps</option>
+          <option value="64">64 kbps</option>
+        </select>
+        <select id="audioFormat" aria-label="Audio format">
+          <option value="mp3">MP3</option>
+          <option value="m4a">M4A</option>
+          <option value="wav">WAV</option>
+          <option value="flac">FLAC</option>
+          <option value="aac">AAC</option>
+        </select>
+        <button class="btn btn-gold btn-block" id="downloadAudioBtn">Download audio</button>
+      </div>
+      <div class="tab-panel" data-panel="extras">
+        <div class="extra-row">
+          <button class="chip-btn" id="thumbChip">Thumbnail</button>
+          <button class="chip-btn" id="subChip">Subtitles</button>
+        </div>
+        <button class="btn btn-ghost btn-block" id="downloadExtraBtn">Download selected</button>
+      </div>
+    </div>
+
+    <!-- Download manager -->
+    <div class="download-manager" id="downloadManager"></div>
+  </div>
+</section>
+
+<section id="platforms">
+  <div class="container">
+    <div class="section-head">
+      <h2>Works with the platforms you already use</h2>
+      <p>One paste bar, every major source.</p>
+    </div>
+    <div class="platform-grid">
+      <span class="platform-pill">▶ YouTube</span>
+      <span class="platform-pill">♪ TikTok</span>
+      <span class="platform-pill">◉ Instagram</span>
+      <span class="platform-pill">𝕏 X / Twitter</span>
+      <span class="platform-pill">f Facebook</span>
+      <span class="platform-pill">▷ Vimeo</span>
+      <span class="platform-pill">▶ Dailymotion</span>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="container">
+    <div class="section-head">
+      <h2>Built for how you actually download</h2>
+      <p>Three steps. No clutter, no forced sign-up.</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="icon">01</div>
+        <h3>Paste the link</h3>
+        <p>Drop in any supported URL — auto-detect can even grab it from your clipboard.</p>
+      </div>
+      <div class="card">
+        <div class="icon">02</div>
+        <h3>Preview instantly</h3>
+        <p>See the thumbnail, title, duration, and every available format before committing.</p>
+      </div>
+      <div class="card">
+        <div class="icon">03</div>
+        <h3>Download your way</h3>
+        <p>Pick the exact quality and format — video, audio-only, subtitles, or thumbnail.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="stats-row">
+      <div>
+        <div class="stat-num">7+</div>
+        <div class="stat-label">Platforms supported</div>
+      </div>
+      <div>
+        <div class="stat-num">4K</div>
+        <div class="stat-label">Max video quality</div>
+      </div>
+      <div>
+        <div class="stat-num">0</div>
+        <div class="stat-label">Sign-ups required</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container">
+    <div class="section-head">
+      <h2>What people are saying</h2>
+    </div>
+    <div class="testimonial-grid">
+      <div class="testimonial">
+        <p class="quote">"Fast, and it just works — no five redirect pages before the download starts."</p>
+        <div class="who">
+          <div class="avatar">A</div>
+          <div><div class="who-name">Amina K.</div><div class="who-role">Content creator</div></div>
+        </div>
+      </div>
+      <div class="testimonial">
+        <p class="quote">"The quality picker is exactly what other tools skip. Simple and clean."</p>
+        <div class="who">
+          <div class="avatar">J</div>
+          <div><div class="who-name">James O.</div><div class="who-role">Student</div></div>
+        </div>
+      </div>
+      <div class="testimonial">
+        <p class="quote">"Audio-only downloads at 320kbps saved me from three other apps."</p>
+        <div class="who">
+          <div class="avatar">W</div>
+          <div><div class="who-name">Wanjiru M.</div><div class="who-role">Podcaster</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="faq">
+  <div class="container">
+    <div class="section-head">
+      <h2>Frequently asked questions</h2>
+    </div>
+    <div class="prose" id="faqList">
+      <div class="faq-item open">
+        <div class="faq-q">Is MB MEDIA free to use? <span class="chev">▾</span></div>
+        <div class="faq-a">Yes. There's no sign-up and no hidden paywall on downloads. If you'd like to support ongoing hosting costs, there's an optional donate page.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Which platforms are supported? <span class="chev">▾</span></div>
+        <div class="faq-a">YouTube, TikTok, Instagram, X (Twitter), Facebook, Vimeo, and Dailymotion. Support depends on the source platform's public availability at any given time.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Is downloading copyrighted content legal? <span class="chev">▾</span></div>
+        <div class="faq-a">Copyright law and each platform's terms of service still apply to whatever you download. Only download content you own, have permission to use, or that's clearly licensed for reuse. See our DMCA Policy for takedown requests.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Why did my download fail? <span class="chev">▾</span></div>
+        <div class="faq-a">Some content is geo-restricted, private, or age-gated by the source platform and can't be fetched. If a link consistently fails, try a different quality option or confirm the video is still public.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Does this work on mobile? <span class="chev">▾</span></div>
+        <div class="faq-a">Yes — the site is fully responsive. Clipboard auto-detect depends on your mobile browser's clipboard permissions.</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">Which browsers are supported? <span class="chev">▾</span></div>
+        <div class="faq-a">Chrome, Edge, Firefox, Safari, and Opera on both desktop and mobile.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container" style="text-align:center;">
+    <div class="section-head" style="margin-bottom:20px;">
+      <h2>Enjoying MB MEDIA?</h2>
+      <p>Hosting and platform maintenance are funded entirely by donations.</p>
+    </div>
+    <a href="/donate" class="btn btn-gold" style="display:inline-block;">Support the project</a>
+  </div>
+</section>
+
+{% endblock %}

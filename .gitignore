@@ -1,0 +1,6 @@
+downloads/
+cookies/
+analytics.db
+__pycache__/
+*.pyc
+.env

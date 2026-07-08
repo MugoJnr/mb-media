@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: mb-media
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile

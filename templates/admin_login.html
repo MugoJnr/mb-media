@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Admin — MB MEDIA{% endblock %}
+{% block content %}
+<div class="page-hero container"><h1>Admin</h1><p>Analytics dashboard</p></div>
+<section>
+  <div class="container" style="max-width:380px;">
+    <form method="POST" class="contact-form">
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required autofocus>
+      </div>
+      {% if error %}<p style="color:var(--error); font-size:0.85rem;">{{ error }}</p>{% endif %}
+      <button type="submit" class="btn btn-gold">Log in</button>
+    </form>
+  </div>
+</section>
+{% endblock %}

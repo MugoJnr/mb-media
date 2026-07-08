@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Admin Dashboard — MB MEDIA{% endblock %}
+{% block content %}
+<div class="page-hero container">
+  <h1>Analytics</h1>
+  <p><a href="/admin/logout" style="color:var(--gold);">Log out</a></p>
+</div>
+<section>
+  <div class="container">
+    <div class="stats-row" style="margin-bottom:50px;">
+      <div><div class="stat-num">{{ total }}</div><div class="stat-label">Total downloads</div></div>
+      <div><div class="stat-num">{{ today }}</div><div class="stat-label">Last 24 hours</div></div>
+      <div><div class="stat-num">{{ this_month }}</div><div class="stat-label">Last 30 days</div></div>
+      <div><div class="stat-num">{{ active_jobs }}</div><div class="stat-label">Active jobs now</div></div>
+    </div>
+
+    <div class="grid" style="grid-template-columns: 1fr 1fr;">
+      <div class="card">
+        <h3 style="margin-bottom:14px;">By platform</h3>
+        {% for platform, count in by_platform %}
+          <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:0.88rem;">
+            <span>{{ platform }}</span><span class="mono">{{ count }}</span>
+          </div>
+        {% else %}
+          <p style="color:var(--muted); font-size:0.85rem;">No downloads yet.</p>
+        {% endfor %}
+      </div>
+      <div class="card">
+        <h3 style="margin-bottom:14px;">By type</h3>
+        {% for kind, count in by_kind %}
+          <div style="display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border); font-size:0.88rem;">
+            <span>{{ kind }}</span><span class="mono">{{ count }}</span>
+          </div>
+        {% else %}
+          <p style="color:var(--muted); font-size:0.85rem;">No downloads yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:18px;">
+      <h3 style="margin-bottom:14px;">Recent errors</h3>
+      {% for platform, message, ts in recent_errors %}
+        <div style="padding:10px 0; border-bottom:1px solid var(--border); font-size:0.82rem;">
+          <span class="mono" style="color:var(--gold);">{{ platform }}</span>
+          <span style="color:var(--muted);"> — {{ message }}</span>
+        </div>
+      {% else %}
+        <p style="color:var(--muted); font-size:0.85rem;">No errors logged.</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}
