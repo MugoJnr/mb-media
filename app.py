@@ -52,11 +52,31 @@ MAX_FILESIZE_MB = int(os.environ.get("MAX_FILESIZE_MB", 2000))  # 2 GB
 
 COOKIES_DIR = os.path.join(os.path.dirname(__file__), "cookies")
 os.makedirs(COOKIES_DIR, exist_ok=True)
+SERVER_COOKIES_PATH = os.path.join(COOKIES_DIR, "server.txt")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "analytics.db")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 CONTACT_TO_EMAIL = os.environ.get("CONTACT_TO_EMAIL")
+YTDLP_PROXY = (os.environ.get("YTDLP_PROXY") or "").strip() or None
+YTDLP_COOKIES_FILE = (os.environ.get("YTDLP_COOKIES_FILE") or "").strip() or None
+
+
+def _bootstrap_server_cookies():
+    """Allow operators to inject base64 Netscape cookies via env at boot."""
+    b64 = (os.environ.get("YTDLP_COOKIES_B64") or "").strip()
+    if not b64:
+        return
+    try:
+        import base64
+        raw = base64.b64decode(b64)
+        with open(SERVER_COOKIES_PATH, "wb") as fh:
+            fh.write(raw)
+    except Exception as e:
+        app.logger.warning(f"Failed to decode YTDLP_COOKIES_B64: {e}")
+
+
+_bootstrap_server_cookies()
 
 
 def init_db():
@@ -274,14 +294,38 @@ def cookiefile_for_token(token):
     return path if os.path.isfile(path) else None
 
 
-def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True):
+def resolve_cookiefile(token=None):
+    """Prefer per-user cookie token, then explicit env file, then server cookies."""
+    user_path = cookiefile_for_token(token)
+    if user_path:
+        return user_path
+    if YTDLP_COOKIES_FILE and os.path.isfile(YTDLP_COOKIES_FILE):
+        return YTDLP_COOKIES_FILE
+    if os.path.isfile(SERVER_COOKIES_PATH):
+        return SERVER_COOKIES_PATH
+    return None
+
+
+# Ordered strategies for YouTube on cloud IPs. First success wins.
+YOUTUBE_CLIENT_STRATEGIES = [
+    ["android", "web"],
+    ["tv", "web_embedded"],
+    ["android_vr"],
+    ["mweb", "web"],
+    ["web"],
+]
+
+
+def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, player_clients=None):
     """Shared yt-dlp options tuned for cloud hosts (bot / datacenter IP blocks)."""
+    clients = player_clients or ["android", "web"]
     opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": noplaylist,
         "retries": 3,
         "fragment_retries": 3,
+        "force_ipv4": True,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -290,10 +334,10 @@ def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True):
             ),
             "Accept-Language": "en-US,en;q=0.9",
         },
-        # Prefer clients that are less aggressive about bot challenges on cloud IPs.
         "extractor_args": {
             "youtube": {
-                "player_client": ["android", "web"],
+                "player_client": clients,
+                "player_skip": ["webpage"],
             }
         },
     }
@@ -301,18 +345,69 @@ def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True):
         opts["skip_download"] = True
     if cookiefile:
         opts["cookiefile"] = cookiefile
+    if YTDLP_PROXY:
+        opts["proxy"] = YTDLP_PROXY
     return opts
+
+
+def extract_with_fallback(url, cookiefile=None, *, skip_download=False, noplaylist=True):
+    """Try multiple YouTube player clients until one returns usable info."""
+    last_error = None
+    strategies = YOUTUBE_CLIENT_STRATEGIES if "youtu" in url.lower() else [None]
+    for clients in strategies:
+        opts = base_ydl_opts(
+            cookiefile,
+            skip_download=skip_download,
+            noplaylist=noplaylist,
+            player_clients=clients,
+        )
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            # If this was info-only, just return. Download path uses download() separately.
+            if skip_download:
+                formats = info.get("formats") or []
+                if not formats and info.get("_type") != "playlist" and "entries" not in info:
+                    last_error = RuntimeError("No video formats found for this link.")
+                    continue
+            return info
+        except Exception as e:
+            last_error = e
+            continue
+    if last_error:
+        raise last_error
+    raise RuntimeError("Could not extract media info.")
+
+
+def download_with_fallback(url, ydl_opts_builder):
+    """Run yt-dlp download across client strategies until one succeeds."""
+    last_error = None
+    strategies = YOUTUBE_CLIENT_STRATEGIES if "youtu" in url.lower() else [None]
+    for clients in strategies:
+        opts = ydl_opts_builder(clients)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+            return
+        except Exception as e:
+            last_error = e
+            continue
+    if last_error:
+        raise last_error
+    raise RuntimeError("Download failed for all client strategies.")
 
 
 def friendly_extractor_error(exc, *, for_download=False):
     msg = str(exc or "")
     low = msg.lower()
-    if any(tok in low for tok in ("sign in to confirm", "not a bot", "confirm you're not a bot", "login required", "cookies")):
+    if any(tok in low for tok in ("sign in to confirm", "not a bot", "confirm you're not a bot", "login required")):
         action = "download" if for_download else "preview"
         return (
             f"YouTube is blocking this server from fetching that link without a logged-in session. "
             f"Click the 🍪 button, upload a cookies.txt export, then try the {action} again."
         )
+    if "drm" in low:
+        return "This video is DRM-protected and cannot be downloaded."
     if "private" in low or "unavailable" in low:
         return "This video is private, removed, or unavailable."
     if "geo" in low or "not available in your country" in low:
@@ -335,12 +430,10 @@ def api_info():
     if not platform:
         return jsonify({"error": "Unsupported or unrecognized platform."}), 400
 
-    cookiefile = cookiefile_for_token(cookie_token)
-    ydl_opts = base_ydl_opts(cookiefile, skip_download=True, noplaylist=False)
+    cookiefile = resolve_cookiefile(cookie_token)
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        info = extract_with_fallback(url, cookiefile, skip_download=True, noplaylist=False)
     except Exception as e:
         record_error(platform, str(e))
         return jsonify({"error": friendly_extractor_error(e, for_download=False)}), 422
@@ -464,9 +557,7 @@ def run_download_job(job_id, url, kind, format_id=None, audio_quality=None, audi
 
         # Pre-check duration/size before committing bandwidth to a full download.
         try:
-            check_opts = base_ydl_opts(cookiefile, skip_download=True, noplaylist=True)
-            with yt_dlp.YoutubeDL(check_opts) as ydl:
-                check_info = ydl.extract_info(url, download=False)
+            check_info = extract_with_fallback(url, cookiefile, skip_download=True, noplaylist=True)
 
             duration = check_info.get("duration")
             if duration and duration > MAX_DURATION_SECONDS:
@@ -500,42 +591,42 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(title).80s.%(ext)s")
 
-    ydl_opts = base_ydl_opts(cookiefile, noplaylist=True)
-    ydl_opts["outtmpl"] = outtmpl
-    ydl_opts["progress_hooks"] = [make_progress_hook(job_id)]
+    def build_opts(clients):
+        opts = base_ydl_opts(cookiefile, noplaylist=True, player_clients=clients)
+        opts["outtmpl"] = outtmpl
+        opts["progress_hooks"] = [make_progress_hook(job_id)]
 
-    try:
         if kind == "video":
-            ydl_opts["format"] = (
-                format_id or "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            opts["format"] = (
+                format_id
+                or "bestvideo*+bestaudio/best[ext=mp4]/best"
             )
-            ydl_opts["merge_output_format"] = "mp4"
-
+            opts["merge_output_format"] = "mp4"
+            opts["format_sort"] = ["res:1080", "ext:mp4:m4a"]
         elif kind == "audio":
-            ydl_opts["format"] = "bestaudio/best"
-            ydl_opts["postprocessors"] = [{
+            opts["format"] = "bestaudio/best"
+            opts["postprocessors"] = [{
                 "key": "FFmpegExtractAudio",
                 "preferredcodec": audio_format or "mp3",
                 "preferredquality": str(audio_quality or "192"),
             }]
-
         elif kind == "thumbnail":
-            ydl_opts["skip_download"] = True
-            ydl_opts["writethumbnail"] = True
-
+            opts["skip_download"] = True
+            opts["writethumbnail"] = True
         elif kind == "subtitles":
-            ydl_opts["skip_download"] = True
-            ydl_opts["writesubtitles"] = True
-            ydl_opts["writeautomaticsub"] = True
-            ydl_opts["subtitleslangs"] = ["en"]
+            opts["skip_download"] = True
+            opts["writesubtitles"] = True
+            opts["writeautomaticsub"] = True
+            opts["subtitleslangs"] = ["en"]
+        return opts
 
-        else:
+    try:
+        if kind not in ("video", "audio", "thumbnail", "subtitles"):
             with JOBS_LOCK:
                 JOBS[job_id] = {"status": "error", "error": "Unknown download type."}
             return
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        download_with_fallback(url, build_opts)
 
         files = [f for f in os.listdir(job_dir) if not f.startswith(".")]
         if not files:
@@ -578,7 +669,7 @@ def api_download():
     if kind not in ("video", "audio", "thumbnail", "subtitles"):
         return jsonify({"error": "Unsupported download type."}), 400
 
-    cookiefile = cookiefile_for_token(cookie_token)
+    cookiefile = resolve_cookiefile(cookie_token)
 
     job_id = str(uuid.uuid4())
     with JOBS_LOCK:
@@ -654,7 +745,26 @@ def admin():
         total=total, today=today, this_month=this_month,
         by_platform=by_platform, by_kind=by_kind, recent_errors=recent_errors,
         active_jobs=len(JOBS),
+        has_server_cookies=bool(resolve_cookiefile()),
+        has_proxy=bool(YTDLP_PROXY),
+        cookies_message=None,
     )
+
+
+@app.route("/admin/cookies", methods=["POST"])
+@limiter.limit("10 per hour")
+def admin_cookies():
+    if not session.get("is_admin"):
+        return redirect(url_for("admin"))
+
+    file = request.files.get("cookies")
+    if not file:
+        return redirect(url_for("admin"))
+    if file.filename and not file.filename.endswith(".txt"):
+        return redirect(url_for("admin"))
+
+    file.save(SERVER_COOKIES_PATH)
+    return redirect(url_for("admin"))
 
 
 @app.route("/admin/logout")
@@ -665,7 +775,11 @@ def admin_logout():
 
 @app.route("/api/health")
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({
+        "status": "ok",
+        "cookies": bool(resolve_cookiefile()),
+        "proxy": bool(YTDLP_PROXY),
+    })
 
 
 if __name__ == "__main__":

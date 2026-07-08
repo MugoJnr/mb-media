@@ -14,6 +14,29 @@
       <div><div class="stat-num">{{ active_jobs }}</div><div class="stat-label">Active jobs now</div></div>
     </div>
 
+    <div class="card" style="margin-bottom:18px;">
+      <h3 style="margin-bottom:10px;">YouTube unlock (required for cloud hosts)</h3>
+      <p style="color:var(--muted); font-size:0.88rem; margin-bottom:12px;">
+        Render uses datacenter IPs, so YouTube often blocks downloads unless the server has cookies or a residential proxy.
+        Upload a Netscape <code>cookies.txt</code> here once and every visitor benefits.
+      </p>
+      <p style="font-size:0.88rem; margin-bottom:12px;">
+        Server cookies:
+        <strong style="color:{{ 'var(--gold)' if has_server_cookies else 'var(--muted)' }}">
+          {{ 'active' if has_server_cookies else 'missing' }}
+        </strong>
+        &nbsp;·&nbsp;
+        Proxy:
+        <strong style="color:{{ 'var(--gold)' if has_proxy else 'var(--muted)' }}">
+          {{ 'configured' if has_proxy else 'not set' }}
+        </strong>
+      </p>
+      <form action="/admin/cookies" method="post" enctype="multipart/form-data" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input type="file" name="cookies" accept=".txt" required style="color:var(--text);">
+        <button class="btn btn-gold" type="submit">Save server cookies</button>
+      </form>
+    </div>
+
     <div class="grid" style="grid-template-columns: 1fr 1fr;">
       <div class="card">
         <h3 style="margin-bottom:14px;">By platform</h3>
