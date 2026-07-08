@@ -204,11 +204,27 @@ if (urlInput) {
     previewSkeleton.style.display = 'block';
     setStatus('Fetching preview…');
 
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90000);
+
     try {
+      // Strip YouTube Mix/playlist params so preview doesn't hang on giant lists.
+      let requestUrl = url;
+      try {
+        const u = new URL(url);
+        if (/youtu\.?be|youtube\.com/i.test(u.hostname) && u.searchParams.get('v')) {
+          const clean = new URL('https://www.youtube.com/watch');
+          clean.searchParams.set('v', u.searchParams.get('v'));
+          if (u.searchParams.get('t')) clean.searchParams.set('t', u.searchParams.get('t'));
+          requestUrl = clean.toString();
+        }
+      } catch (_) { /* keep original */ }
+
       const res = await fetch('/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, cookie_token: getCookieToken() })
+        body: JSON.stringify({ url: requestUrl, cookie_token: getCookieToken() }),
+        signal: controller.signal,
       });
       const data = await res.json();
 
@@ -218,11 +234,17 @@ if (urlInput) {
       }
 
       currentInfo = data;
+      currentUrl = requestUrl;
       renderPreview(data);
       setStatus('');
     } catch (e) {
-      setStatus('Network error — try again.', true);
+      if (e && e.name === 'AbortError') {
+        setStatus('Preview timed out. Try again, or upload cookies with the 🍪 button.', true);
+      } else {
+        setStatus('Network error — try again.', true);
+      }
     } finally {
+      clearTimeout(timeoutId);
       fetchBtn.disabled = false;
       previewSkeleton.style.display = 'none';
     }

@@ -312,22 +312,49 @@ def resolve_cookiefile(token=None):
 # Ordered strategies for YouTube on cloud IPs. First success wins.
 YOUTUBE_CLIENT_STRATEGIES = [
     ["android", "web"],
+    ["web", "mweb"],
     ["tv", "web_embedded"],
     ["android_vr"],
-    ["mweb", "web"],
     ["web"],
 ]
+
+
+def normalize_media_url(url: str) -> str:
+    """Prefer the single video for YouTube watch+list links to avoid playlist stalls."""
+    low = (url or "").lower()
+    if "youtu" not in low:
+        return url
+    try:
+        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+        parsed = urlparse(url)
+        qs = parse_qs(parsed.query)
+        if "v" in qs:
+            clean = {"v": qs["v"][0]}
+            if "t" in qs:
+                clean["t"] = qs["t"][0]
+            return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", urlencode(clean), ""))
+        # youtu.be/<id>?list=...
+        if "youtu.be" in parsed.netloc and parsed.path.strip("/"):
+            return f"https://www.youtube.com/watch?v={parsed.path.strip('/')}"
+    except Exception:
+        return url
+    return url
 
 
 def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, player_clients=None):
     """Shared yt-dlp options tuned for cloud hosts (bot / datacenter IP blocks)."""
     clients = player_clients or ["android", "web"]
+    youtube_args = {"player_client": clients}
+    # Skipping webpage helps on bare datacenter IPs, but hurts authenticated cookie sessions.
+    if not cookiefile:
+        youtube_args["player_skip"] = ["webpage"]
     opts = {
         "quiet": True,
         "no_warnings": True,
         "noplaylist": noplaylist,
         "retries": 3,
         "fragment_retries": 3,
+        "socket_timeout": 20,
         "force_ipv4": True,
         "http_headers": {
             "User-Agent": (
@@ -337,12 +364,7 @@ def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, play
             ),
             "Accept-Language": "en-US,en;q=0.9",
         },
-        "extractor_args": {
-            "youtube": {
-                "player_client": clients,
-                "player_skip": ["webpage"],
-            }
-        },
+        "extractor_args": {"youtube": youtube_args},
     }
     if skip_download:
         opts["skip_download"] = True
@@ -429,6 +451,7 @@ def api_info():
 
     if not url:
         return jsonify({"error": "No URL provided."}), 400
+    url = normalize_media_url(url)
     platform = detect_platform(url)
     if not platform:
         return jsonify({"error": "Unsupported or unrecognized platform."}), 400
@@ -436,7 +459,8 @@ def api_info():
     cookiefile = resolve_cookiefile(cookie_token)
 
     try:
-        info = extract_with_fallback(url, cookiefile, skip_download=True, noplaylist=False)
+        # Prefer single-video extraction; playlists can hang for minutes on free hosts.
+        info = extract_with_fallback(url, cookiefile, skip_download=True, noplaylist=True)
     except Exception as e:
         record_error(platform, str(e))
         return jsonify({"error": friendly_extractor_error(e, for_download=False)}), 422
@@ -667,6 +691,7 @@ def api_download():
 
     if not url:
         return jsonify({"error": "No URL provided."}), 400
+    url = normalize_media_url(url)
     if not detect_platform(url):
         return jsonify({"error": "Unsupported or unrecognized platform."}), 400
     if kind not in ("video", "audio", "thumbnail", "subtitles"):
