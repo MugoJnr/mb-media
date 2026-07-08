@@ -2,5 +2,14 @@ services:
   - type: web
     name: mb-media
     runtime: docker
-    plan: free
+    plan: starter
+    region: ohio
     dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: MAX_CONCURRENT_DOWNLOADS
+        value: "1"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_PASSWORD
+        sync: false

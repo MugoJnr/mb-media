@@ -274,6 +274,54 @@ def cookiefile_for_token(token):
     return path if os.path.isfile(path) else None
 
 
+def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True):
+    """Shared yt-dlp options tuned for cloud hosts (bot / datacenter IP blocks)."""
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": noplaylist,
+        "retries": 3,
+        "fragment_retries": 3,
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+        # Prefer clients that are less aggressive about bot challenges on cloud IPs.
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["android", "web"],
+            }
+        },
+    }
+    if skip_download:
+        opts["skip_download"] = True
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    return opts
+
+
+def friendly_extractor_error(exc, *, for_download=False):
+    msg = str(exc or "")
+    low = msg.lower()
+    if any(tok in low for tok in ("sign in to confirm", "not a bot", "confirm you're not a bot", "login required", "cookies")):
+        action = "download" if for_download else "preview"
+        return (
+            f"YouTube is blocking this server from fetching that link without a logged-in session. "
+            f"Click the 🍪 button, upload a cookies.txt export, then try the {action} again."
+        )
+    if "private" in low or "unavailable" in low:
+        return "This video is private, removed, or unavailable."
+    if "geo" in low or "not available in your country" in low:
+        return "This video is geo-restricted and cannot be fetched from this server."
+    if for_download:
+        return "Download failed. The link may be restricted or the format unavailable."
+    return "Could not fetch video info. The link may be private, geo-restricted, or invalid."
+
+
 @app.route("/api/info", methods=["POST"])
 @limiter.limit("30 per hour")
 def api_info():
@@ -287,22 +335,15 @@ def api_info():
     if not platform:
         return jsonify({"error": "Unsupported or unrecognized platform."}), 400
 
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": False,
-    }
     cookiefile = cookiefile_for_token(cookie_token)
-    if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile
+    ydl_opts = base_ydl_opts(cookiefile, skip_download=True, noplaylist=False)
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
     except Exception as e:
         record_error(platform, str(e))
-        return jsonify({"error": "Could not fetch video info. The link may be private, geo-restricted, or invalid."}), 422
+        return jsonify({"error": friendly_extractor_error(e, for_download=False)}), 422
 
     is_playlist = info.get("_type") == "playlist" or "entries" in info
     entry_count = None
@@ -423,9 +464,7 @@ def run_download_job(job_id, url, kind, format_id=None, audio_quality=None, audi
 
         # Pre-check duration/size before committing bandwidth to a full download.
         try:
-            check_opts = {"quiet": True, "no_warnings": True, "skip_download": True, "noplaylist": True}
-            if cookiefile:
-                check_opts["cookiefile"] = cookiefile
+            check_opts = base_ydl_opts(cookiefile, skip_download=True, noplaylist=True)
             with yt_dlp.YoutubeDL(check_opts) as ydl:
                 check_info = ydl.extract_info(url, download=False)
 
@@ -461,15 +500,9 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(title).80s.%(ext)s")
 
-    ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "noplaylist": True,
-        "outtmpl": outtmpl,
-        "progress_hooks": [make_progress_hook(job_id)],
-    }
-    if cookiefile:
-        ydl_opts["cookiefile"] = cookiefile
+    ydl_opts = base_ydl_opts(cookiefile, noplaylist=True)
+    ydl_opts["outtmpl"] = outtmpl
+    ydl_opts["progress_hooks"] = [make_progress_hook(job_id)]
 
     try:
         if kind == "video":
@@ -524,7 +557,7 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
         shutil.rmtree(job_dir, ignore_errors=True)
         record_error(platform, str(e))
         with JOBS_LOCK:
-            JOBS[job_id] = {"status": "error", "error": "Download failed. The link may be restricted or the format unavailable."}
+            JOBS[job_id] = {"status": "error", "error": friendly_extractor_error(e, for_download=True)}
 
 
 @app.route("/api/download", methods=["POST"])
