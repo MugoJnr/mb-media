@@ -120,7 +120,16 @@ if (urlInput) {
   const emptyStateHTML = '<p style="text-align:center; color:var(--muted); font-size:0.85rem; padding:20px 0;">Your downloads will appear here.</p>';
   downloadManager.innerHTML = emptyStateHTML;
 
-  const URL_PATTERN = /(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|facebook\.com|fb\.watch|vimeo\.com|dailymotion\.com)/i;
+  const URL_PATTERN = /(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|facebook\.com|fb\.watch|fb\.gg|vimeo\.com|dailymotion\.com|dai\.ly|vm\.tiktok\.com|vt\.tiktok\.com)/i;
+  const TRACKING_PARAMS = new Set([
+    'si', 'feature', 'pp', 'bpctr', 'spfreload', 'rc', 'source', 'src',
+    'igshid', 'igsh', 'img_index', 's', 'ref_src', 'ref_url',
+    'fbclid', 'gclid', 'mc_cid', 'mc_eid',
+    'is_from_webapp', 'sender_device', 'sender_web_id', 'share_app_id',
+    'share_item_type', 'share_link_id', 'share_author_id',
+    'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'utm_id',
+    'start_radio', 'index',
+  ]);
   let currentUrl = '';
   let currentInfo = null;
   let selectedExtras = new Set();
@@ -130,13 +139,166 @@ if (urlInput) {
     statusEl.className = isError ? 'error' : '';
   }
 
+  /** Detect and repair common broken/share/mix URLs before fetch (mirrors server). */
+  function sanitizeMediaUrl(raw) {
+    const changes = [];
+    let text = (raw || '').trim().replace(/^['"]+|['"]+$/g, '');
+    if (!text) return { url: '', changes };
+
+    const embedded = text.match(/https?:\/\/[^\s<>"']+/i);
+    if (embedded) {
+      const extracted = embedded[0].replace(/[).,}\]>"']+$/g, '');
+      if (extracted !== text) changes.push('extracted link from pasted text');
+      text = extracted;
+    } else if (/^(www\.|[a-z0-9-]+\.)?[a-z0-9-]+\.[a-z]{2,}/i.test(text) && !/^https?:\/\//i.test(text)) {
+      text = 'https://' + text.replace(/^\/+/, '');
+      changes.push('added https://');
+    }
+
+    if (!/^https?:\/\//i.test(text)) {
+      text = 'https://' + text.replace(/^\/+/, '');
+      changes.push('added https://');
+    }
+
+    let u;
+    try { u = new URL(text); } catch (_) { return { url: text, changes }; }
+
+    let host = u.hostname.toLowerCase().replace(/^www\./, '');
+    const path = u.pathname || '';
+
+    const stripTracking = () => {
+      let removed = false;
+      [...u.searchParams.keys()].forEach((k) => {
+        const low = k.toLowerCase();
+        if (TRACKING_PARAMS.has(low) || low.startsWith('utm_')) {
+          u.searchParams.delete(k);
+          removed = true;
+        }
+      });
+      return removed;
+    };
+
+    // YouTube
+    if (/youtube\.com|youtu\.be|youtube-nocookie\.com/i.test(host)) {
+      if (host.startsWith('music.') || host.startsWith('m.')) {
+        host = 'youtube.com';
+        changes.push('converted mobile/music YouTube host');
+      }
+      const shortMatch = path.match(/\/(shorts|embed|live|v)\/([A-Za-z0-9_-]{6,})/);
+      if (shortMatch) {
+        const clean = new URL('https://www.youtube.com/watch');
+        clean.searchParams.set('v', shortMatch[2]);
+        const t = u.searchParams.get('t') || u.searchParams.get('start');
+        if (t) clean.searchParams.set('t', t);
+        changes.push(`converted /${shortMatch[1]}/ link to watch URL`);
+        return { url: clean.toString(), changes };
+      }
+      if (host.includes('youtu.be')) {
+        const vid = path.replace(/^\/+|\/+$/g, '').split('/')[0];
+        if (vid) {
+          const clean = new URL('https://www.youtube.com/watch');
+          clean.searchParams.set('v', vid);
+          if (u.searchParams.get('t')) clean.searchParams.set('t', u.searchParams.get('t'));
+          changes.push('expanded youtu.be short link');
+          return { url: clean.toString(), changes };
+        }
+      }
+      if (path.includes('/watch') && u.searchParams.get('v')) {
+        const clean = new URL('https://www.youtube.com/watch');
+        clean.searchParams.set('v', u.searchParams.get('v'));
+        if (u.searchParams.get('t')) clean.searchParams.set('t', u.searchParams.get('t'));
+        const listId = u.searchParams.get('list') || '';
+        if (listId.startsWith('RD')) changes.push('removed YouTube Mix (list=RD...) to avoid stall');
+        else if (listId) changes.push('removed playlist list= param; using this video only');
+        const keep = new Set(['v', 't', 'list']);
+        for (const k of u.searchParams.keys()) {
+          if (!keep.has(k)) { changes.push('removed tracking parameters'); break; }
+        }
+        return { url: clean.toString(), changes };
+      }
+    }
+
+    // TikTok
+    if (host.includes('tiktok.com')) {
+      const m = path.match(/(?:\/@([^/]+))?\/video\/(\d+)/);
+      if (m) {
+        const user = m[1] || '';
+        const id = m[2];
+        const newPath = user ? `/@${user}/video/${id}` : `/video/${id}`;
+        const cleaned = `https://www.tiktok.com${newPath}`;
+        if (stripTracking() || cleaned !== text) {
+          if ([...u.searchParams.keys()].length || u.search) changes.push('removed TikTok share/tracking params');
+          if (cleaned !== text) changes.push('normalized TikTok video path');
+        }
+        return { url: cleaned, changes: [...new Set(changes)] };
+      }
+      if (stripTracking()) {
+        changes.push('removed TikTok share/tracking params');
+        return { url: u.toString(), changes };
+      }
+    }
+
+    // Instagram
+    if (host.includes('instagram.com')) {
+      const m = path.match(/\/(reel|reels|p|tv)\/([^/?#]+)/);
+      if (m) {
+        let kind = m[1] === 'reels' ? 'reel' : m[1];
+        const cleaned = `https://www.instagram.com/${kind}/${m[2]}/`;
+        if (stripTracking()) changes.push('removed Instagram tracking params');
+        if (cleaned !== text) changes.push('normalized Instagram media path');
+        return { url: cleaned, changes };
+      }
+      if (stripTracking()) {
+        changes.push('removed Instagram tracking params');
+        return { url: u.toString(), changes };
+      }
+    }
+
+    // X / Twitter
+    if (host === 'x.com' || host === 'twitter.com' || host === 'mobile.twitter.com') {
+      const m = path.match(/\/([^/]+)\/status\/(\d+)/);
+      if (m) {
+        const cleaned = `https://x.com/${m[1]}/status/${m[2]}`;
+        if (stripTracking() || u.searchParams.has('t')) changes.push('removed X/Twitter tracking params');
+        if (cleaned !== text) changes.push('normalized X status URL');
+        return { url: cleaned, changes };
+      }
+      if (stripTracking()) {
+        changes.push('removed X/Twitter tracking params');
+        u.hostname = 'x.com';
+        return { url: u.toString(), changes };
+      }
+    }
+
+    if (stripTracking()) {
+      changes.push('removed tracking parameters');
+      return { url: u.toString(), changes };
+    }
+
+    return { url: text, changes };
+  }
+
+  function applyUrlFixes(original, data, alreadyToasted) {
+    const fixed = (data && data.normalized_url) || original;
+    if (fixed && fixed !== urlInput.value.trim()) {
+      urlInput.value = fixed;
+    }
+    const fixes = (data && data.url_fixes) || [];
+    // Only toast server-only fixes if the client hadn't already rewritten the URL.
+    if (!alreadyToasted && fixes.length && fixed && fixed !== original) {
+      toast('Link fixed: ' + fixes[0], 'success');
+    }
+    return fixed;
+  }
+
   function isSupported(url) {
+    const { url: cleaned } = sanitizeMediaUrl(url);
     try {
-      new URL(url);
+      new URL(cleaned);
     } catch (e) {
       return false;
     }
-    return URL_PATTERN.test(url);
+    return URL_PATTERN.test(cleaned);
   }
 
   function formatDuration(sec) {
@@ -194,11 +356,21 @@ if (urlInput) {
 
   // ---------- Fetch info ----------
   async function fetchInfo() {
-    const url = urlInput.value.trim();
-    if (!url) { setStatus('Paste a link first.', true); return; }
-    if (!isSupported(url)) { setStatus('Unsupported or invalid URL.', true); return; }
+    const pasted = urlInput.value.trim();
+    if (!pasted) { setStatus('Paste a link first.', true); return; }
 
-    currentUrl = url;
+    const local = sanitizeMediaUrl(pasted);
+    if (!local.url || !URL_PATTERN.test(local.url)) {
+      setStatus('Unsupported or invalid URL.', true);
+      return;
+    }
+    const alreadyToasted = !!(local.changes.length && local.url !== pasted);
+    if (alreadyToasted) {
+      urlInput.value = local.url;
+      toast('Link fixed: ' + local.changes[0], 'success');
+    }
+
+    currentUrl = local.url;
     fetchBtn.disabled = true;
     previewCard.style.display = 'none';
     previewSkeleton.style.display = 'block';
@@ -208,22 +380,10 @@ if (urlInput) {
     const timeoutId = setTimeout(() => controller.abort(), 90000);
 
     try {
-      // Strip YouTube Mix/playlist params so preview doesn't hang on giant lists.
-      let requestUrl = url;
-      try {
-        const u = new URL(url);
-        if (/youtu\.?be|youtube\.com/i.test(u.hostname) && u.searchParams.get('v')) {
-          const clean = new URL('https://www.youtube.com/watch');
-          clean.searchParams.set('v', u.searchParams.get('v'));
-          if (u.searchParams.get('t')) clean.searchParams.set('t', u.searchParams.get('t'));
-          requestUrl = clean.toString();
-        }
-      } catch (_) { /* keep original */ }
-
       const res = await fetch('/api/info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: requestUrl, cookie_token: getCookieToken() }),
+        body: JSON.stringify({ url: local.url, cookie_token: getCookieToken() }),
         signal: controller.signal,
       });
       const data = await res.json();
@@ -234,7 +394,7 @@ if (urlInput) {
       }
 
       currentInfo = data;
-      currentUrl = requestUrl;
+      currentUrl = applyUrlFixes(local.url, data, alreadyToasted);
       renderPreview(data);
       setStatus('');
     } catch (e) {

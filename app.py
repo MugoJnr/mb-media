@@ -5,7 +5,7 @@ import uuid
 import shutil
 import sqlite3
 import threading
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlparse, parse_qs, urlencode, urlunparse
 
 import requests
 from flask import Flask, request, jsonify, render_template, send_file, abort, session, redirect, url_for
@@ -29,13 +29,25 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 FILE_TTL = 15 * 60  # seconds a finished file is kept before auto-delete
 
 SUPPORTED_DOMAINS = {
-    "youtube.com": "YouTube", "youtu.be": "YouTube",
-    "tiktok.com": "TikTok",
+    "youtube.com": "YouTube", "youtu.be": "YouTube", "music.youtube.com": "YouTube",
+    "tiktok.com": "TikTok", "vm.tiktok.com": "TikTok", "vt.tiktok.com": "TikTok",
     "instagram.com": "Instagram",
-    "twitter.com": "X (Twitter)", "x.com": "X (Twitter)",
-    "facebook.com": "Facebook", "fb.watch": "Facebook",
+    "twitter.com": "X (Twitter)", "x.com": "X (Twitter)", "mobile.twitter.com": "X (Twitter)",
+    "facebook.com": "Facebook", "fb.watch": "Facebook", "fb.gg": "Facebook",
     "vimeo.com": "Vimeo",
-    "dailymotion.com": "Dailymotion",
+    "dailymotion.com": "Dailymotion", "dai.ly": "Dailymotion",
+}
+
+# Tracking / share noise that often breaks or slows extraction.
+# Note: do not include YouTube start-time "t" here; YouTube handling keeps it separately.
+_TRACKING_PARAMS = {
+    "si", "feature", "pp", "bpctr", "spfreload", "rc", "source", "src",
+    "igshid", "igsh", "img_index",
+    "s", "ref_src", "ref_url",
+    "fbclid", "gclid", "mc_cid", "mc_eid",
+    "is_from_webapp", "sender_device", "sender_web_id", "share_app_id",
+    "share_item_type", "share_link_id", "share_author_id",
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
 }
 
 # In-memory job tracking. Fine for a single free instance; would need
@@ -320,26 +332,200 @@ YOUTUBE_CLIENT_STRATEGIES = [
 ]
 
 
-def normalize_media_url(url: str) -> str:
-    """Prefer the single video for YouTube watch+list links to avoid playlist stalls."""
-    low = (url or "").lower()
-    if "youtu" not in low:
-        return url
+def extract_url_candidate(text: str) -> tuple[str, list[str]]:
+    """Pull the first http(s) URL out of pasted chat/share text."""
+    notes: list[str] = []
+    text = (text or "").strip().strip('"').strip("'")
+    if not text:
+        return "", notes
+    match = re.search(r"https?://[^\s<>\"']+", text, flags=re.I)
+    if match:
+        extracted = match.group(0).rstrip(").,]}>\"'")
+        if extracted != text:
+            notes.append("extracted link from pasted text")
+        return extracted, notes
+    # Bare domain paste without scheme.
+    if re.match(r"^(www\.|[a-z0-9-]+\.)?[a-z0-9-]+\.[a-z]{2,}(/|\?|#|$)", text, re.I):
+        notes.append("added https://")
+        return "https://" + text.lstrip("/"), notes
+    return text, notes
+
+
+def _strip_tracking_params(qs: dict) -> tuple[dict, bool]:
+    cleaned = {}
+    removed = False
+    for key, values in qs.items():
+        low = key.lower()
+        if low in _TRACKING_PARAMS or low.startswith("utm_"):
+            removed = True
+            continue
+        cleaned[key] = values[0] if isinstance(values, list) and values else values
+    return cleaned, removed
+
+
+def resolve_short_redirect(url: str, timeout: float = 6.0) -> tuple[str, bool]:
+    """Follow one hop for known short/share hosts (TikTok vm/vt, dai.ly, fb.watch)."""
+    low = url.lower()
+    if not any(h in low for h in ("vm.tiktok.com", "vt.tiktok.com", "dai.ly", "fb.watch", "t.co/")):
+        return url, False
     try:
-        from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-        parsed = urlparse(url)
-        qs = parse_qs(parsed.query)
-        if "v" in qs:
-            clean = {"v": qs["v"][0]}
-            if "t" in qs:
-                clean["t"] = qs["t"][0]
-            return urlunparse((parsed.scheme, parsed.netloc, parsed.path, "", urlencode(clean), ""))
-        # youtu.be/<id>?list=...
-        if "youtu.be" in parsed.netloc and parsed.path.strip("/"):
-            return f"https://www.youtube.com/watch?v={parsed.path.strip('/')}"
+        resp = requests.head(url, allow_redirects=True, timeout=timeout)
+        final = (resp.url or "").strip()
+        if final and final != url:
+            return final, True
     except Exception:
-        return url
-    return url
+        try:
+            resp = requests.get(url, allow_redirects=True, timeout=timeout, stream=True)
+            final = (resp.url or "").strip()
+            resp.close()
+            if final and final != url:
+                return final, True
+        except Exception:
+            pass
+    return url, False
+
+
+def sanitize_media_url(url: str) -> tuple[str, list[str]]:
+    """Detect and repair common broken/share/mix URLs before fetch."""
+    changes: list[str] = []
+    raw, extract_notes = extract_url_candidate(url)
+    changes.extend(extract_notes)
+    if not raw:
+        return "", changes
+
+    if not re.match(r"^https?://", raw, re.I):
+        raw = "https://" + raw.lstrip("/")
+        changes.append("added https://")
+
+    raw, redirected = resolve_short_redirect(raw)
+    if redirected:
+        changes.append("followed short/share redirect")
+
+    try:
+        parsed = urlparse(raw)
+    except Exception:
+        return raw, changes
+
+    host = (parsed.netloc or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path or ""
+    qs = parse_qs(parsed.query or "")
+    fragment = parsed.fragment or ""
+
+    # ---- YouTube family ----
+    if any(h in host for h in ("youtube.com", "youtu.be", "youtube-nocookie.com")):
+        if host.startswith("music.") or host.startswith("m."):
+            host = "youtube.com"
+            changes.append("converted mobile/music YouTube host")
+
+        m = re.search(r"/(shorts|embed|live|v)/([A-Za-z0-9_-]{6,})", path)
+        if m:
+            cleaned = {"v": m.group(2)}
+            if "t" in qs:
+                cleaned["t"] = qs["t"][0]
+            elif "start" in qs:
+                cleaned["t"] = qs["start"][0]
+            changes.append(f"converted /{m.group(1)}/ link to watch URL")
+            return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode(cleaned), "")), changes
+
+        if "youtu.be" in host:
+            vid = path.strip("/").split("/")[0]
+            if vid:
+                cleaned = {"v": vid}
+                if "t" in qs:
+                    cleaned["t"] = qs["t"][0]
+                changes.append("expanded youtu.be short link")
+                return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode(cleaned), "")), changes
+
+        if "/watch" in path and "v" in qs:
+            cleaned = {"v": qs["v"][0]}
+            if "t" in qs:
+                cleaned["t"] = qs["t"][0]
+            elif fragment.startswith("t="):
+                cleaned["t"] = fragment[2:]
+            list_id = (qs.get("list") or [""])[0]
+            if list_id:
+                if list_id.startswith("RD"):
+                    changes.append("removed YouTube Mix (list=RD...) to avoid stall")
+                else:
+                    changes.append("removed playlist list= param; using this video only")
+            if set(qs.keys()) - {"v", "t", "list"}:
+                changes.append("removed tracking parameters")
+            return urlunparse(("https", "www.youtube.com", "/watch", "", urlencode(cleaned), "")), changes
+
+        if path.rstrip("/") == "/playlist" and (qs.get("list") or [""])[0].startswith("RD"):
+            changes.append("YouTube Mix playlists need a specific video link")
+            return raw, changes
+
+    # ---- TikTok ----
+    elif "tiktok.com" in host:
+        cleaned_qs, removed = _strip_tracking_params(qs)
+        m = re.search(r"(?:/@[^/]+)?/video/(\d+)", path)
+        if m:
+            video_id = m.group(1)
+            um = re.search(r"/@([^/]+)/video/", path)
+            user = um.group(1) if um else ""
+            new_path = f"/@{user}/video/{video_id}" if user else f"/video/{video_id}"
+            new_url = urlunparse(("https", "www.tiktok.com", new_path, "", "", ""))
+            if removed:
+                changes.append("removed TikTok share/tracking params")
+            if new_url != raw:
+                changes.append("normalized TikTok video path")
+            return new_url, changes
+        if removed:
+            changes.append("removed TikTok share/tracking params")
+            return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", urlencode(cleaned_qs), "")), changes
+
+    # ---- Instagram ----
+    elif "instagram.com" in host:
+        cleaned_qs, removed = _strip_tracking_params(qs)
+        m = re.search(r"/(reel|reels|p|tv)/([^/?#]+)", path)
+        if m:
+            kind, code = m.group(1), m.group(2)
+            kind = "reel" if kind == "reels" else kind
+            new_url = urlunparse(("https", "www.instagram.com", f"/{kind}/{code}/", "", "", ""))
+            if removed:
+                changes.append("removed Instagram tracking params")
+            if new_url != raw:
+                changes.append("normalized Instagram media path")
+            return new_url, changes
+        if removed:
+            changes.append("removed Instagram tracking params")
+            return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", urlencode(cleaned_qs), "")), changes
+
+    # ---- X / Twitter ----
+    elif host in ("x.com", "twitter.com", "mobile.twitter.com"):
+        cleaned_qs, removed = _strip_tracking_params(qs)
+        if "t" in cleaned_qs:
+            cleaned_qs.pop("t", None)
+            removed = True
+        m = re.search(r"/([^/]+)/status/(\d+)", path)
+        if m:
+            user, sid = m.group(1), m.group(2)
+            new_url = f"https://x.com/{user}/status/{sid}"
+            if removed:
+                changes.append("removed X/Twitter tracking params")
+            if new_url != raw:
+                changes.append("normalized X status URL")
+            return new_url, changes
+        if removed:
+            changes.append("removed X/Twitter tracking params")
+            return urlunparse(("https", "x.com", path, "", urlencode(cleaned_qs), "")), changes
+
+    # ---- Facebook / Vimeo / Dailymotion generic tracking strip ----
+    else:
+        cleaned_qs, removed = _strip_tracking_params(qs)
+        if removed:
+            changes.append("removed tracking parameters")
+            return urlunparse((parsed.scheme or "https", parsed.netloc, path, "", urlencode(cleaned_qs), "")), changes
+
+    return raw, changes
+
+
+def normalize_media_url(url: str) -> str:
+    cleaned, _ = sanitize_media_url(url)
+    return cleaned or (url or "").strip()
 
 
 def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, player_clients=None):
@@ -452,7 +638,9 @@ def api_info():
 
     if not url:
         return jsonify({"error": "No URL provided."}), 400
-    url = normalize_media_url(url)
+    url, url_fixes = sanitize_media_url(url)
+    if not url:
+        return jsonify({"error": "No URL provided."}), 400
     platform = detect_platform(url)
     if not platform:
         return jsonify({"error": "Unsupported or unrecognized platform."}), 400
@@ -516,6 +704,8 @@ def api_info():
         "playlist_entries": playlist_entries,
         "subtitles_available": subtitles_available,
         "formats": formats[:8],
+        "normalized_url": url,
+        "url_fixes": url_fixes,
     })
 
 
@@ -699,8 +889,8 @@ def api_download():
 
     if not url:
         return jsonify({"error": "No URL provided."}), 400
-    url = normalize_media_url(url)
-    if not detect_platform(url):
+    url, url_fixes = sanitize_media_url(url)
+    if not url or not detect_platform(url):
         return jsonify({"error": "Unsupported or unrecognized platform."}), 400
     if kind not in ("video", "audio", "thumbnail", "subtitles"):
         return jsonify({"error": "Unsupported download type."}), 400
@@ -720,7 +910,7 @@ def api_download():
     )
     thread.start()
 
-    return jsonify({"job_id": job_id})
+    return jsonify({"job_id": job_id, "normalized_url": url, "url_fixes": url_fixes})
 
 
 @app.route("/api/progress/<job_id>")
