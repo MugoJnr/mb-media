@@ -269,8 +269,48 @@ img { max-width: 100%; display: block; }
   color: var(--muted);
   font-size: 1.05rem;
   max-width: 520px;
-  margin: 0 auto 40px;
+  margin: 0 auto 22px;
   animation: fadeUp 0.6s ease 0.2s both;
+}
+
+.status-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  max-width: 620px;
+  margin: 0 auto 28px;
+  padding: 12px 14px;
+  text-align: left;
+  background: color-mix(in srgb, var(--gold) 10%, var(--surface));
+  border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--border));
+  border-radius: var(--radius-sm);
+  animation: fadeUp 0.6s ease 0.25s both;
+}
+.status-banner-label {
+  flex-shrink: 0;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--bg);
+  background: var(--gold);
+  border-radius: 999px;
+  padding: 4px 9px;
+  line-height: 1.2;
+}
+.status-banner p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+@media (max-width: 560px) {
+  .status-banner {
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 22px;
+  }
 }
 
 @keyframes fadeUp {
