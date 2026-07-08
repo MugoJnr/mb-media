@@ -11,26 +11,40 @@
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 
-<link rel="icon" href="data:,">
+<link rel="icon" type="image/png" sizes="48x48" href="{{ url_for('static', filename='favicon.png') }}">
+<link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='brand/icon.png') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='brand/icon.png') }}">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=DM+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
 
 <nav class="nav">
   <div class="nav-inner">
-    <a href="/" class="brand">MB<span class="dot">•</span>MEDIA</a>
+    <div class="brand-wrap">
+      <a href="/" class="brand" aria-label="MB MEDIA home">
+        <img class="brand-mark" src="{{ url_for('static', filename='brand/icon.png') }}" width="28" height="28" alt="" aria-hidden="true">
+        <span class="brand-text">MB<span class="dot">•</span>MEDIA</span>
+      </a>
+      <a
+        class="built-by"
+        href="https://www.mugobyte.com/"
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Built by MugoByte Technologies"
+      >Built by <strong>MugoByte</strong></a>
+    </div>
     <ul class="nav-links">
-      <li><a href="/#downloader">Downloader</a></li>
-      <li><a href="/#platforms">Supported Sites</a></li>
-      <li><a href="/#features">Features</a></li>
-      <li><a href="/history">History</a></li>
-      <li><a href="/#faq">FAQ</a></li>
-      <li><a href="/donate">Donate</a></li>
-      <li><a href="/contact">Contact</a></li>
-      <li><a href="/about">About</a></li>
+      <li><a href="/" data-nav="home">Downloader</a></li>
+      <li><a href="/#platforms" data-nav="platforms">Supported Sites</a></li>
+      <li><a href="/#features" data-nav="features">Features</a></li>
+      <li><a href="/history" data-nav="history">History</a></li>
+      <li><a href="/#faq" data-nav="faq">FAQ</a></li>
+      <li><a href="/donate" data-nav="donate">Donate</a></li>
+      <li><a href="/contact" data-nav="contact">Contact</a></li>
+      <li><a href="/about" data-nav="about">About</a></li>
     </ul>
     <div class="nav-actions">
       <button class="theme-toggle" id="cookiesBtn" aria-label="Upload cookies file" title="Upload cookies.txt for private/age-gated content">🍪</button>
@@ -39,14 +53,15 @@
     </div>
   </div>
   <div class="mobile-menu" id="mobileMenu">
-    <a href="/#downloader">Downloader</a>
-    <a href="/#platforms">Supported Sites</a>
-    <a href="/#features">Features</a>
-    <a href="/history">History</a>
-    <a href="/#faq">FAQ</a>
-    <a href="/donate">Donate</a>
-    <a href="/contact">Contact</a>
-    <a href="/about">About</a>
+    <a href="/" data-nav="home">Downloader</a>
+    <a href="/#platforms" data-nav="platforms">Supported Sites</a>
+    <a href="/#features" data-nav="features">Features</a>
+    <a href="/history" data-nav="history">History</a>
+    <a href="/#faq" data-nav="faq">FAQ</a>
+    <a href="/donate" data-nav="donate">Donate</a>
+    <a href="/contact" data-nav="contact">Contact</a>
+    <a href="/about" data-nav="about">About</a>
+    <a class="mobile-built-by" href="https://www.mugobyte.com/" target="_blank" rel="noopener noreferrer">Built with ♥ by MugoByte Technologies</a>
   </div>
 </nav>
 
@@ -69,7 +84,10 @@
   <div class="container">
     <div class="footer-grid">
       <div>
-        <a href="/" class="brand" style="margin-bottom:10px; display:inline-flex;">MB<span class="dot">•</span>MEDIA</a>
+        <a href="/" class="brand" style="margin-bottom:10px; display:inline-flex;">
+          <img class="brand-mark" src="{{ url_for('static', filename='brand/icon.png') }}" width="24" height="24" alt="" aria-hidden="true">
+          <span class="brand-text">MB<span class="dot">•</span>MEDIA</span>
+        </a>
         <p style="color:var(--muted); font-size:0.85rem; max-width:280px; margin-top:10px;">Paste a link, preview the media, download in the format and quality you want.</p>
       </div>
       <div>
@@ -101,7 +119,7 @@
     </div>
     <div class="footer-bottom">
       <span>© <span id="year"></span> MB MEDIA. All rights reserved.</span>
-      <span>Created by <a href="https://mugobyte.com" target="_blank" rel="noopener">MugoByte Technologies</a></span>
+      <span>Built by <a href="https://www.mugobyte.com/" target="_blank" rel="noopener noreferrer">MugoByte Technologies</a></span>
     </div>
   </div>
 </footer>

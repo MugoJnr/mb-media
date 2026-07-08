@@ -1,6 +1,6 @@
 /* ============================================
    MB MEDIA — Design tokens
-   Display: Space Grotesk / Body: Inter / Mono: JetBrains Mono
+   Display: Space Grotesk / Body: DM Sans / Mono: JetBrains Mono
    ============================================ */
 :root {
   --bg: #0a0a0d;
@@ -47,7 +47,7 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: "DM Sans", -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 16px;
   line-height: 1.55;
   transition: background 0.25s ease, color 0.25s ease;
@@ -84,36 +84,93 @@ img { max-width: 100%; display: block; }
 .nav-inner {
   max-width: var(--max-width);
   margin: 0 auto;
-  padding: 14px 20px;
+  padding: 10px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
+}
+.brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 1;
 }
 .brand {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   font-family: "Space Grotesk", sans-serif;
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
   text-decoration: none;
+  color: var(--text);
+  min-width: 0;
 }
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--gold) 35%, transparent);
+}
+.brand-text { white-space: nowrap; }
 .brand .dot { color: var(--gold); }
+.built-by {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--border));
+  background: color-mix(in srgb, var(--gold) 10%, transparent);
+  color: var(--muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.built-by strong { color: var(--gold); font-weight: 600; }
+.built-by:hover {
+  color: var(--text);
+  border-color: var(--gold);
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+}
 .nav-links {
   display: flex;
-  gap: 24px;
+  gap: 18px;
   list-style: none;
   margin: 0;
   padding: 0;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 .nav-links a {
   text-decoration: none;
   color: var(--muted);
-  font-size: 0.92rem;
+  font-size: 0.9rem;
   transition: color 0.15s;
+  position: relative;
+  padding: 4px 0;
 }
-.nav-links a:hover, .nav-links a.active { color: var(--text); }
-.nav-actions { display: flex; align-items: center; gap: 12px; }
+.nav-links a:hover { color: var(--text); }
+.nav-links a.active {
+  color: var(--gold);
+  font-weight: 600;
+}
+.nav-links a.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--gold);
+}
+.nav-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .theme-toggle {
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -143,14 +200,30 @@ img { max-width: 100%; display: block; }
 .mobile-menu a {
   color: var(--muted);
   text-decoration: none;
-  padding: 10px 0;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border);
   font-size: 0.95rem;
 }
+.mobile-menu a.active {
+  color: var(--gold);
+  font-weight: 600;
+}
+.mobile-built-by {
+  border-bottom: none !important;
+  margin-top: 8px;
+  font-size: 0.75rem !important;
+  color: var(--muted) !important;
+  text-align: center;
+}
 
-@media (max-width: 760px) {
+@media (max-width: 980px) {
   .nav-links { display: none; }
   .hamburger { display: block; }
+}
+@media (max-width: 520px) {
+  .built-by { display: none; }
+  .brand-text { font-size: 0.98rem; }
+  .nav-inner { padding: 10px 12px; }
 }
 
 /* ---------- Hero ---------- */
@@ -244,9 +317,11 @@ img { max-width: 100%; display: block; }
   border-radius: var(--radius);
   padding: 8px;
   box-shadow: var(--shadow);
+  align-items: stretch;
 }
 .input-bar input {
   flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--text);
@@ -255,6 +330,30 @@ img { max-width: 100%; display: block; }
   outline: none;
 }
 .input-bar input::placeholder { color: var(--muted); }
+.input-bar .btn {
+  flex-shrink: 0;
+  align-self: stretch;
+}
+@media (max-width: 560px) {
+  .hero { padding: 56px 0 40px; }
+  .hero p.tagline { margin-bottom: 28px; }
+  .converge { max-width: 100%; }
+  .input-bar {
+    flex-direction: column;
+    padding: 10px;
+    gap: 10px;
+  }
+  .input-bar input {
+    width: 100%;
+    padding: 14px 12px;
+    font-size: 1rem;
+  }
+  .input-bar .btn {
+    width: 100%;
+    padding: 14px 18px;
+  }
+  .platform-orbit { gap: 10px; margin-bottom: 14px; }
+}
 .btn {
   border: none;
   border-radius: var(--radius-sm);
@@ -561,9 +660,15 @@ section { padding: 70px 0; }
   color: var(--muted);
 }
 
-form.contact-form {
-  max-width: 520px;
+.contact-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 28px;
+  align-items: start;
+  max-width: 920px;
   margin: 0 auto;
+}
+form.contact-form {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -574,7 +679,7 @@ form.contact-form {
   color: var(--muted);
   margin-bottom: 6px;
 }
-.field input, .field textarea {
+.field input, .field textarea, .field select {
   width: 100%;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -585,11 +690,57 @@ form.contact-form {
   font-family: inherit;
   outline: none;
 }
-.field textarea { resize: vertical; min-height: 110px; }
-.field input:focus, .field textarea:focus { border-color: var(--gold); }
+.field select {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position: calc(100% - 18px) calc(50% - 3px), calc(100% - 12px) calc(50% - 3px);
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 34px;
+}
+.field textarea { resize: vertical; min-height: 120px; }
+.field input:focus, .field textarea:focus, .field select:focus { border-color: var(--gold); }
 .field .error-msg { color: var(--error); font-size: 0.76rem; margin-top: 4px; display: none; }
 .field.invalid .error-msg { display: block; }
-.field.invalid input, .field.invalid textarea { border-color: var(--error); }
+.field.invalid input, .field.invalid textarea, .field.invalid select { border-color: var(--error); }
+.contact-aside {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.contact-aside h3 {
+  font-size: 1rem;
+  margin-bottom: 8px;
+}
+.contact-aside p, .contact-aside li {
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+.contact-aside ul {
+  margin: 12px 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.contact-aside a { color: var(--gold); text-decoration: none; }
+.contact-aside a:hover { text-decoration: underline; }
+.aside-note { margin-top: 14px; }
+.linkish {
+  background: none;
+  border: none;
+  color: var(--gold);
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  text-decoration: underline;
+}
+@media (max-width: 760px) {
+  .contact-layout { grid-template-columns: 1fr; }
+}
 
 /* ---------- Footer ---------- */
 footer {

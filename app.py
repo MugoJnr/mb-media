@@ -147,6 +147,17 @@ def init_db():
             created_at INTEGER
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT,
+            name TEXT,
+            email TEXT,
+            subject TEXT,
+            message TEXT,
+            created_at INTEGER
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -285,18 +296,32 @@ def api_contact():
     email = (data.get("email") or "").strip()
     subject = (data.get("subject") or "").strip()
     message = (data.get("message") or "").strip()
+    kind = (data.get("type") or "other").strip().lower()[:40]
 
     if not name or not email or not subject or not message:
         return jsonify({"error": "All fields are required."}), 400
     if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", email):
         return jsonify({"error": "Enter a valid email address."}), 400
+    if len(name) > 120 or len(subject) > 200 or len(message) > 5000:
+        return jsonify({"error": "One or more fields are too long."}), 400
 
-    # Always log locally so nothing is lost even if email sending fails.
-    app.logger.info(f"[CONTACT] {name} <{email}> — {subject}: {message[:200]}")
+    # Persist locally so nothing is lost even if outbound email is unset.
+    app.logger.info(f"[CONTACT] ({kind}) {name} <{email}> — {subject}: {message[:200]}")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO contacts (kind, name, email, subject, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (kind, name, email, subject, message, int(time.time())),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        app.logger.warning(f"Contact DB save failed: {e}")
 
+    emailed = False
     if RESEND_API_KEY and CONTACT_TO_EMAIL:
         try:
-            requests.post(
+            resp = requests.post(
                 "https://api.resend.com/emails",
                 headers={"Authorization": f"Bearer {RESEND_API_KEY}"},
                 json={
@@ -304,16 +329,17 @@ def api_contact():
                     "to": [CONTACT_TO_EMAIL],
                     "reply_to": email,
                     "subject": f"[MB MEDIA] {subject}",
-                    "text": f"From: {name} <{email}>\n\n{message}",
+                    "text": f"Type: {kind}\nFrom: {name} <{email}>\n\n{message}",
                 },
                 timeout=8,
             )
+            emailed = resp.status_code < 300
+            if not emailed:
+                app.logger.warning(f"Contact email provider status: {resp.status_code} {resp.text[:200]}")
         except Exception as e:
             app.logger.warning(f"Contact email failed to send: {e}")
-    # If RESEND_API_KEY / CONTACT_TO_EMAIL aren't set, messages are still
-    # captured in the server log above — set both env vars to enable real email.
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "emailed": emailed})
 
 
 # ---------- API: info ----------

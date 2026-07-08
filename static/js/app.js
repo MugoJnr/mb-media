@@ -31,6 +31,29 @@ if (hamburger && mobileMenu) {
   mobileMenu.querySelectorAll('a').forEach(a => a.addEventListener('click', () => mobileMenu.classList.remove('open')));
 }
 
+// ---------- Active nav tab ----------
+(function initActiveNav() {
+  function markActiveNav() {
+    const path = (window.location.pathname || '/').replace(/\/+$/, '') || '/';
+    const hash = (window.location.hash || '').replace(/^#/, '');
+    let key = 'home';
+    if (path.startsWith('/contact')) key = 'contact';
+    else if (path.startsWith('/about')) key = 'about';
+    else if (path.startsWith('/donate')) key = 'donate';
+    else if (path.startsWith('/history')) key = 'history';
+    else if (hash === 'platforms') key = 'platforms';
+    else if (hash === 'features') key = 'features';
+    else if (hash === 'faq') key = 'faq';
+    else if (path === '/' || path === '') key = 'home';
+
+    document.querySelectorAll('[data-nav]').forEach((a) => {
+      a.classList.toggle('active', a.getAttribute('data-nav') === key);
+    });
+  }
+  markActiveNav();
+  window.addEventListener('hashchange', markActiveNav);
+})();
+
 // ---------- Toast ----------
 function toast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -676,16 +699,46 @@ if (urlInput) {
 }
 
 // ============================================
-// Contact form validation
+// Contact form — report / suggestion / question
 // ============================================
 const contactForm = document.getElementById('contactForm');
 if (contactForm) {
+  const TYPE_LABELS = {
+    report: 'Report an error',
+    suggestion: 'Suggestion',
+    question: 'Question',
+    takedown: 'Takedown / DMCA',
+    other: 'Other',
+  };
   const fields = {
     cName: { el: document.getElementById('fieldName'), validate: v => v.trim().length > 0 },
     cEmail: { el: document.getElementById('fieldEmail'), validate: v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) },
     cSubject: { el: document.getElementById('fieldSubject'), validate: v => v.trim().length > 0 },
     cMessage: { el: document.getElementById('fieldMessage'), validate: v => v.trim().length > 0 },
   };
+
+  function contactPayload() {
+    const type = (document.getElementById('cType')?.value || 'other').trim();
+    const subjectRaw = document.getElementById('cSubject').value.trim();
+    const label = TYPE_LABELS[type] || 'Contact';
+    return {
+      type,
+      name: document.getElementById('cName').value.trim(),
+      email: document.getElementById('cEmail').value.trim(),
+      subject: `[${label}] ${subjectRaw}`,
+      message: document.getElementById('cMessage').value.trim(),
+    };
+  }
+
+  const mailtoBtn = document.getElementById('mailtoFallbackBtn');
+  if (mailtoBtn) {
+    mailtoBtn.addEventListener('click', () => {
+      const p = contactPayload();
+      const body = `Name: ${p.name}\nEmail: ${p.email}\nType: ${p.type}\n\n${p.message}`;
+      const href = `mailto:admin@mugobyte.com?subject=${encodeURIComponent(p.subject)}&body=${encodeURIComponent(body)}`;
+      window.location.href = href;
+    });
+  }
 
   contactForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -699,28 +752,33 @@ if (contactForm) {
     if (!valid) return;
 
     const statusEl = document.getElementById('contactStatus');
+    const submitBtn = document.getElementById('contactSubmitBtn');
+    const payload = contactPayload();
     statusEl.textContent = 'Sending…';
+    if (submitBtn) submitBtn.disabled = true;
 
     try {
       const res = await fetch('/api/contact', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: document.getElementById('cName').value,
-          email: document.getElementById('cEmail').value,
-          subject: document.getElementById('cSubject').value,
-          message: document.getElementById('cMessage').value,
-        })
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (res.ok) {
-        statusEl.textContent = 'Message sent — thanks for reaching out.';
+        statusEl.textContent = data.emailed
+          ? 'Message sent — thanks for reaching out.'
+          : 'Message received. We also saved it on the server. Thanks for helping improve MB MEDIA.';
+        toast('Thanks — your message was submitted.', 'success');
         contactForm.reset();
+        const typeEl = document.getElementById('cType');
+        if (typeEl) typeEl.value = 'suggestion';
       } else {
         statusEl.textContent = data.error || 'Something went wrong.';
       }
-    } catch (e) {
-      statusEl.textContent = 'Network error — try again.';
+    } catch (err) {
+      statusEl.textContent = 'Network error — try again, or use the email fallback.';
+    } finally {
+      if (submitBtn) submitBtn.disabled = false;
     }
   });
 }

@@ -3,34 +3,57 @@
 {% block content %}
 <div class="page-hero container">
   <h1>Get in touch</h1>
-  <p>Questions, bug reports, or takedown requests.</p>
+  <p>Report a download error, suggest a feature, or ask a question. Same contact flow we use on ExamHub — plus email if needed.</p>
 </div>
 <section>
   <div class="container">
-    <form class="contact-form" id="contactForm" novalidate>
-      <div class="field" id="fieldName">
-        <label for="cName">Name</label>
-        <input type="text" id="cName" name="name" required>
-        <div class="error-msg">Please enter your name.</div>
-      </div>
-      <div class="field" id="fieldEmail">
-        <label for="cEmail">Email</label>
-        <input type="email" id="cEmail" name="email" required>
-        <div class="error-msg">Please enter a valid email address.</div>
-      </div>
-      <div class="field" id="fieldSubject">
-        <label for="cSubject">Subject</label>
-        <input type="text" id="cSubject" name="subject" required>
-        <div class="error-msg">Please enter a subject.</div>
-      </div>
-      <div class="field" id="fieldMessage">
-        <label for="cMessage">Message</label>
-        <textarea id="cMessage" name="message" required></textarea>
-        <div class="error-msg">Please enter a message.</div>
-      </div>
-      <button type="submit" class="btn btn-gold">Send message</button>
-      <div id="contactStatus" style="font-size:0.85rem; color:var(--muted);"></div>
-    </form>
+    <div class="contact-layout">
+      <form class="contact-form" id="contactForm" novalidate>
+        <div class="field" id="fieldType">
+          <label for="cType">What is this about?</label>
+          <select id="cType" name="type" required>
+            <option value="report">Report an error</option>
+            <option value="suggestion" selected>Suggestion / feature idea</option>
+            <option value="question">General question</option>
+            <option value="takedown">Takedown / DMCA</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div class="field" id="fieldName">
+          <label for="cName">Name</label>
+          <input type="text" id="cName" name="name" required autocomplete="name">
+          <div class="error-msg">Please enter your name.</div>
+        </div>
+        <div class="field" id="fieldEmail">
+          <label for="cEmail">Email</label>
+          <input type="email" id="cEmail" name="email" required autocomplete="email">
+          <div class="error-msg">Please enter a valid email address.</div>
+        </div>
+        <div class="field" id="fieldSubject">
+          <label for="cSubject">Subject</label>
+          <input type="text" id="cSubject" name="subject" required placeholder="Short summary">
+          <div class="error-msg">Please enter a subject.</div>
+        </div>
+        <div class="field" id="fieldMessage">
+          <label for="cMessage">Message</label>
+          <textarea id="cMessage" name="message" required placeholder="What happened? Include the link if reporting a failed download."></textarea>
+          <div class="error-msg">Please enter a message.</div>
+        </div>
+        <button type="submit" class="btn btn-gold" id="contactSubmitBtn">Send message</button>
+        <div id="contactStatus" style="font-size:0.85rem; color:var(--muted);"></div>
+      </form>
+
+      <aside class="contact-aside">
+        <h3>Other ways to reach us</h3>
+        <p>For support, partnerships, or press (ExamHub-style):</p>
+        <ul>
+          <li>Email: <a href="mailto:admin@mugobyte.com">admin@mugobyte.com</a></li>
+          <li>Website: <a href="https://www.mugobyte.com/" target="_blank" rel="noopener noreferrer">mugobyte.com</a></li>
+          <li>Live site: <a href="https://mb-media.onrender.com">mb-media.onrender.com</a></li>
+        </ul>
+        <p class="aside-note">Prefer inbox? Use <button type="button" class="linkish" id="mailtoFallbackBtn">open email app</button> with your form filled in.</p>
+      </aside>
+    </div>
   </div>
 </section>
 {% endblock %}
