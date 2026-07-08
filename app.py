@@ -5,6 +5,7 @@ import uuid
 import shutil
 import sqlite3
 import threading
+from urllib.parse import quote, unquote
 
 import requests
 from flask import Flask, request, jsonify, render_template, send_file, abort, session, redirect, url_for
@@ -660,6 +661,13 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
             raise RuntimeError("No output file was produced.")
 
         filename = files[0]
+        # Keep a short readable name for the user's save dialog.
+        safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", filename).strip(" .") or f"{kind}.bin"
+        if safe_name != filename:
+            dest = os.path.join(job_dir, safe_name)
+            if not os.path.exists(dest):
+                os.replace(os.path.join(job_dir, filename), dest)
+                filename = safe_name
         cleanup_path_later(job_dir)
 
         with JOBS_LOCK:
@@ -667,7 +675,7 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
                 "status": "finished",
                 "percent": 100,
                 "filename": filename,
-                "download_url": f"/api/file/{job_id}/{filename}",
+                "download_url": f"/api/file/{job_id}/{quote(filename)}",
             }
         record_event(platform, kind)
 
@@ -726,9 +734,17 @@ def api_progress(job_id):
 
 @app.route("/api/file/<job_id>/<path:filename>")
 def serve_file(job_id, filename):
-    if ".." in job_id or ".." in filename:
+    filename = unquote(filename or "")
+    if ".." in job_id or ".." in filename or not job_id or not filename:
         abort(400)
-    filepath = os.path.join(DOWNLOAD_DIR, job_id, filename)
+    job_dir = os.path.join(DOWNLOAD_DIR, job_id)
+    filepath = os.path.join(job_dir, filename)
+    # Fallback: if exact name missing, serve the only file in the job dir.
+    if not os.path.isfile(filepath) and os.path.isdir(job_dir):
+        candidates = [f for f in os.listdir(job_dir) if not f.startswith(".")]
+        if len(candidates) == 1:
+            filename = candidates[0]
+            filepath = os.path.join(job_dir, filename)
     if not os.path.isfile(filepath):
         abort(404)
     return send_file(filepath, as_attachment=True, download_name=filename)

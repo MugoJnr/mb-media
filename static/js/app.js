@@ -431,11 +431,21 @@ if (urlInput) {
             speed.textContent = '';
             eta.textContent = '';
             card.classList.add('success');
-            cancelBtn.textContent = 'Open';
-            cancelBtn.onclick = () => window.location = p.download_url;
+            cancelBtn.textContent = 'Save file';
+            const triggerDownload = () => {
+              const a = document.createElement('a');
+              a.href = p.download_url;
+              a.download = '';
+              a.rel = 'noopener';
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+            };
+            cancelBtn.onclick = (ev) => { ev.preventDefault(); triggerDownload(); };
             toast(`${label} ready`, 'success');
             saveHistory({ title: label, url: payload.url, time: Date.now() });
-            window.location = p.download_url;
+            // Download without navigating away (navigating caused 404 pages for titled files).
+            triggerDownload();
           } else if (p.status === 'error') {
             clearInterval(poll);
             card.classList.add('error');
