@@ -221,7 +221,16 @@ img { max-width: 100%; display: block; }
   .hamburger { display: block; }
 }
 @media (max-width: 520px) {
-  .built-by { display: none; }
+  .brand-wrap {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    column-gap: 8px;
+    max-width: calc(100% - 112px);
+  }
+  .built-by {
+    padding: 3px 8px;
+    font-size: 0.62rem;
+  }
   .brand-text { font-size: 0.98rem; }
   .nav-inner { padding: 10px 12px; }
 }
