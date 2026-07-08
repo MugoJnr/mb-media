@@ -78,6 +78,40 @@ YTDLP_PROXY = (os.environ.get("YTDLP_PROXY") or "").strip() or None
 YTDLP_COOKIES_FILE = (os.environ.get("YTDLP_COOKIES_FILE") or "").strip() or None
 
 
+def _load_proxy_config():
+    """Validate proxy env wiring so bad values are visible in health checks."""
+    raw = (os.environ.get("YTDLP_PROXY") or "").strip()
+    if not raw:
+        return {
+            "configured": False,
+            "valid": False,
+            "value": None,
+            "reason": "not_configured",
+        }
+
+    parsed = urlparse(raw)
+    if parsed.scheme not in {"http", "https", "socks5", "socks5h"} or not parsed.hostname:
+        return {
+            "configured": True,
+            "valid": False,
+            "value": None,
+            "reason": "invalid_format",
+        }
+
+    return {
+        "configured": True,
+        "valid": True,
+        "value": raw,
+        "reason": "ok",
+    }
+
+
+PROXY_STATUS = _load_proxy_config()
+YTDLP_PROXY = PROXY_STATUS["value"]
+if PROXY_STATUS["configured"] and not PROXY_STATUS["valid"]:
+    app.logger.warning("YTDLP_PROXY is set but invalid. Expected http(s):// or socks5(h)://host:port")
+
+
 def _bootstrap_server_cookies():
     """Allow operators to inject base64 Netscape cookies via env at boot."""
     b64 = (os.environ.get("YTDLP_COOKIES_B64") or "").strip()
@@ -323,12 +357,14 @@ def resolve_cookiefile(token=None):
 
 
 # Ordered strategies for YouTube on cloud IPs. First success wins.
+# Prefer clients that currently need less / no PO-token attestation, then cookie-friendly ones.
 YOUTUBE_CLIENT_STRATEGIES = [
-    ["android", "web"],
-    ["web", "mweb"],
-    ["tv", "web_embedded"],
-    ["android_vr"],
-    ["web"],
+    ["android_vr"],          # No PO token required for many streams
+    ["tv", "tv_simply"],     # TV clients often skip bot-gate with guest/cookies
+    ["web_safari"],          # HLS formats can succeed without full PO flow
+    ["web_embedded"],        # Works for embeddable videos without PO token
+    ["android"],             # May need cookies / may fail on account cookies
+    ["mweb", "web"],
 ]
 
 
@@ -530,7 +566,7 @@ def normalize_media_url(url: str) -> str:
 
 def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, player_clients=None):
     """Shared yt-dlp options tuned for cloud hosts (bot / datacenter IP blocks)."""
-    clients = player_clients or ["android", "web"]
+    clients = player_clients or ["android_vr"]
     youtube_args = {"player_client": clients}
     # Skipping webpage helps on bare datacenter IPs, but hurts authenticated cookie sessions.
     if not cookiefile:
@@ -543,6 +579,10 @@ def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, play
         "fragment_retries": 3,
         "socket_timeout": 20,
         "force_ipv4": True,
+        # Gentle pacing — rapid bursts on free-tier IPs trigger YouTube bot gates.
+        "sleep_interval_requests": 0.8,
+        "sleep_interval": 1,
+        "max_sleep_interval": 3,
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -614,9 +654,15 @@ def friendly_extractor_error(exc, *, for_download=False):
     low = msg.lower()
     if any(tok in low for tok in ("sign in to confirm", "not a bot", "confirm you're not a bot", "login required")):
         action = "download" if for_download else "preview"
+        has_cookies = bool(resolve_cookiefile())
+        if has_cookies:
+            return (
+                f"YouTube is rate-limiting this server right now. Wait a minute and retry the {action}, "
+                "or try another video / quality. TikTok and Instagram usually still work."
+            )
         return (
-            f"YouTube is blocking this server from fetching that link without a logged-in session. "
-            f"Click the 🍪 button, upload a cookies.txt export, then try the {action} again."
+            f"YouTube blocked this request. An admin must keep server cookies fresh, "
+            f"then retry the {action}."
         )
     if "drm" in low:
         return "This video is DRM-protected and cannot be downloaded."
@@ -1013,6 +1059,9 @@ def health():
         "status": "ok",
         "cookies": bool(resolve_cookiefile()),
         "proxy": bool(YTDLP_PROXY),
+        "proxy_configured": PROXY_STATUS["configured"],
+        "proxy_valid": PROXY_STATUS["valid"],
+        "proxy_reason": PROXY_STATUS["reason"],
     })
 
 
