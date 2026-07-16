@@ -8,7 +8,7 @@ import threading
 from urllib.parse import quote, unquote, urlparse, parse_qs, urlencode, urlunparse
 
 import requests
-from flask import Flask, request, jsonify, render_template, send_file, abort, session, redirect, url_for
+from flask import Flask, request, jsonify, render_template, send_file, send_from_directory, abort, session, redirect, url_for
 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -252,6 +252,11 @@ def index():
     return render_template("index.html")
 
 
+
+
+@app.route("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/vnd.microsoft.icon")
 @app.route("/robots.txt")
 def robots_txt():
     body = (
