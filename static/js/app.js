@@ -71,6 +71,12 @@ function toast(message, type = 'info') {
   setTimeout(() => el.remove(), 4500);
 }
 
+function truncateError(msg, maxLen = 120) {
+  const s = String(msg || '').replace(/\s+/g, ' ').trim();
+  if (s.length <= maxLen) return s;
+  return s.slice(0, maxLen - 1) + '…';
+}
+
 function escapeHtml(value) {
   return String(value ?? '')
     .replace(/&/g, '&amp;')
@@ -851,6 +857,7 @@ if (urlInput) {
       const POLL_FETCH_TIMEOUT_PROCESSING_MS = 30000;
       const RECONNECT_THRESHOLD = 3;
       const MAX_POLL_FAILURES = 45;
+      const MAX_POLL_FAILURES_PROCESSING = 240;
       let pollFailures = 0;
       let lastKnownStatus = null;
       let lastProcessingStage = 'Converting for phones…';
@@ -934,7 +941,7 @@ if (urlInput) {
               if (lastKnownStatus === 'processing') showBusyProcessing();
               return;
             }
-            if (pollFailures >= MAX_POLL_FAILURES) {
+            if (pollFailures >= (lastKnownStatus === 'processing' ? MAX_POLL_FAILURES_PROCESSING : MAX_POLL_FAILURES)) {
               showPollFatal();
               return;
             }
@@ -978,6 +985,9 @@ if (urlInput) {
             cancelBtn.textContent = 'Save file';
             cancelBtn.classList.add('save-btn');
             toast(`${label} ready`, 'success');
+            if (p.convert_warning) {
+              toast(truncateError(p.convert_warning, 200), 'info');
+            }
             saveHistory({ title: label, url: payload.url, time: Date.now() });
             // Defer player prefetch so other jobs' progress polls keep getting worker time.
             setTimeout(() => {
@@ -989,10 +999,11 @@ if (urlInput) {
           } else if (p.status === 'error') {
             clearInterval(poll);
             card.classList.add('error');
+            const errText = p.error || 'Download failed';
             pct.textContent = 'Failed';
-            speed.textContent = p.error || 'Download failed';
+            speed.textContent = truncateError(errText, 160);
             eta.textContent = '';
-            toast(`${label} failed`, 'error');
+            toast(`${label}: ${truncateError(errText, 100)}`, 'error');
           }
         } catch (e) {
           pollFailures++;
@@ -1000,7 +1011,7 @@ if (urlInput) {
             if (lastKnownStatus === 'processing') showBusyProcessing();
             return;
           }
-          if (pollFailures < MAX_POLL_FAILURES) {
+          if (pollFailures < MAX_POLL_FAILURES_PROCESSING) {
             showPollRetry();
             return;
           }

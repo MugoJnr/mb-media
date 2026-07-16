@@ -8,6 +8,7 @@ import uuid
 import shutil
 import sqlite3
 import threading
+from collections import deque
 from urllib.parse import quote, unquote, urlparse, parse_qs, urlencode, urlunparse
 
 import requests
@@ -20,6 +21,27 @@ import yt_dlp
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me-in-production")
+
+# Bust browser/CDN cache for static assets after deploy (override via STATIC_VERSION env).
+def _static_version():
+    env = (os.environ.get("STATIC_VERSION") or "").strip()
+    if env:
+        return env
+    try:
+        js_path = os.path.join(app.static_folder, "js", "app.js")
+        if os.path.isfile(js_path):
+            return str(int(os.path.getmtime(js_path)))
+    except OSError:
+        pass
+    return "1"
+
+
+STATIC_VERSION = _static_version()
+
+
+@app.context_processor
+def inject_static_version():
+    return {"static_version": STATIC_VERSION}
 
 limiter = Limiter(app=app, key_func=get_remote_address, default_limits=["120 per hour"])
 
@@ -773,9 +795,18 @@ def download_with_fallback(url, ydl_opts_builder):
     raise RuntimeError("Download failed for all client strategies.")
 
 
+def _brief_technical(msg, limit=180):
+    """One-line tail of a subprocess/yt-dlp error for the UI."""
+    cleaned = re.sub(r"\s+", " ", (msg or "")).strip()
+    if len(cleaned) <= limit:
+        return cleaned
+    return "…" + cleaned[-(limit - 1):]
+
+
 def friendly_extractor_error(exc, *, for_download=False):
     msg = str(exc or "")
     low = msg.lower()
+    tail = _brief_technical(msg)
     if any(tok in low for tok in ("sign in to confirm", "not a bot", "confirm you're not a bot", "login required")):
         action = "download" if for_download else "preview"
         has_cookies = bool(resolve_cookiefile())
@@ -788,15 +819,22 @@ def friendly_extractor_error(exc, *, for_download=False):
             f"YouTube blocked this request. An admin must keep server cookies fresh, "
             f"then retry the {action}."
         )
+    if "instagram" in low and any(tok in low for tok in ("login", "cookie", "csrf", "rate", "429", "403")):
+        hint = "Try uploading cookies with the 🍪 button, then retry."
+        return f"Instagram blocked this request. {hint} {tail}".strip()
+    if "tiktok" in low and any(tok in low for tok in ("login", "cookie", "403", "429")):
+        return f"TikTok blocked this request. Try cookies (🍪) or another link. {tail}".strip()
     if "drm" in low:
         return "This video is DRM-protected and cannot be downloaded."
     if "private" in low or "unavailable" in low:
         return "This video is private, removed, or unavailable."
     if "geo" in low or "not available in your country" in low:
         return "This video is geo-restricted and cannot be fetched from this server."
+    if "timed out" in low or "timeout" in low:
+        return f"Server timed out — try phone-friendly quality or a shorter clip. {tail}".strip()
     if for_download:
-        return "Download failed. The link may be restricted or the format unavailable."
-    return "Could not fetch video info. The link may be private, geo-restricted, or invalid."
+        return f"Download failed. {tail}".strip() if tail else "Download failed. The link may be restricted or the format unavailable."
+    return f"Could not fetch video info. {tail}".strip() if tail else "Could not fetch video info. The link may be private, geo-restricted, or invalid."
 
 
 @app.route("/api/info", methods=["POST"])
@@ -1043,7 +1081,7 @@ def _run_ffmpeg(cmd, *, timeout=1800, job_id=None, stage="Processing…", durati
         text=True,
         bufsize=1,
     )
-    err_lines = []
+    err_lines = deque(maxlen=40)
     last_pct = [-1.0]
 
     def _emit_progress(line):
@@ -1164,35 +1202,36 @@ def _mp4_faststart(path, job_id=None):
         raise
 
 
-def _transcode_vf_filter(info):
-    """Cap output height during phone transcode so free-tier CPU finishes in minutes."""
-    height = (info or {}).get("height")
-    if height and height > TRANSCODE_MAX_HEIGHT:
-        return f"scale=-2:{TRANSCODE_MAX_HEIGHT}"
-    return None
+def _ffmpeg_thread_args():
+    """Limit ffmpeg CPU/RAM on small Render instances."""
+    return ["-threads", "2"]
 
 
-def _transcode_to_ios_mp4(src_path, job_id=None):
+def _transcode_to_ios_mp4(src_path, job_id=None, *, max_height=None, crf=28):
     """Re-encode to H.264 + AAC MP4 when remux left incompatible codecs."""
     info = _probe_media_file(src_path)
     duration = (info or {}).get("duration")
     base, _ = os.path.splitext(src_path)
     dest = base + "_ios.mp4"
-    vf = _transcode_vf_filter(info)
+    cap = max_height if max_height is not None else TRANSCODE_MAX_HEIGHT
+    vf = None
+    height = (info or {}).get("height")
+    if height and height > cap:
+        vf = f"scale=-2:{cap}"
     h264 = info and _vcodec_is_h264(info.get("vcodec"))
     has_audio = info and info.get("has_audio")
     aac_ok = info and _acodec_is_aac(info.get("acodec"))
     stage = "Converting for phones…"
     if vf:
-        stage = f"Converting for phones ({TRANSCODE_MAX_HEIGHT}p)…"
-    cmd = ["ffmpeg", "-y", "-i", src_path, "-map", "0:v:0"]
+        stage = f"Converting for phones ({cap}p)…"
+    cmd = ["ffmpeg", "-y", "-i", src_path, "-map", "0:v:0", *_ffmpeg_thread_args()]
     if h264 and not vf:
         cmd.extend(["-c:v", "copy"])
     else:
         if vf:
             cmd.extend(["-vf", vf])
         cmd.extend([
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", str(crf),
             "-pix_fmt", "yuv420p",
         ])
     if has_audio:
@@ -1204,25 +1243,52 @@ def _transcode_to_ios_mp4(src_path, job_id=None):
     else:
         cmd.append("-an")
     cmd.extend(["-movflags", "+faststart", dest])
-    _run_ffmpeg(
-        cmd,
-        timeout=TRANSCODE_TIMEOUT,
-        job_id=job_id,
-        stage=stage,
-        duration_sec=duration,
-    )
+    try:
+        _run_ffmpeg(
+            cmd,
+            timeout=TRANSCODE_TIMEOUT,
+            job_id=job_id,
+            stage=stage,
+            duration_sec=duration,
+        )
+    except Exception:
+        if os.path.isfile(dest):
+            os.remove(dest)
+        raise
+    os.remove(src_path)
+    return dest
+
+
+def _simple_remux_mp4(src_path, job_id=None):
+    """Cheap fallback: copy streams into MP4 + faststart."""
+    base, _ = os.path.splitext(src_path)
+    dest = base + "_ios.mp4"
+    try:
+        _run_ffmpeg([
+            "ffmpeg", "-y", "-i", src_path,
+            *_ffmpeg_thread_args(),
+            "-c", "copy", "-movflags", "+faststart",
+            dest,
+        ], timeout=120, job_id=job_id, stage="Remuxing for phones…")
+    except Exception:
+        if os.path.isfile(dest):
+            os.remove(dest)
+        raise
     os.remove(src_path)
     return dest
 
 
 def _ensure_ios_playable_mp4(path, job_id=None):
-    """Ensure downloaded video plays in iOS Files / Photos / Chrome."""
+    """Ensure downloaded video plays in iOS Files / Photos / Chrome.
+
+    Returns (filepath, convert_warning). Never raises — on failure serves the original.
+    """
     if not os.path.isfile(path):
-        return path
+        return path, None
 
     ext = os.path.splitext(path)[1].lower()
     if ext not in (".mp4", ".m4v", ".mov", ".webm", ".mkv"):
-        return path
+        return path, None
 
     info = _probe_media_file(path)
     if info and _is_ios_playable(info):
@@ -1233,15 +1299,34 @@ def _ensure_ios_playable_mp4(path, job_id=None):
         if not path.lower().endswith(".mp4"):
             mp4_path = os.path.splitext(path)[0] + ".mp4"
             os.replace(path, mp4_path)
-            return mp4_path
-        return path
+            return mp4_path, None
+        return path, None
 
     app.logger.info(
         "Transcoding for iOS playback: v=%s a=%s has_audio=%s",
         (info or {}).get("vcodec"), (info or {}).get("acodec"),
         (info or {}).get("has_audio"),
     )
-    return _transcode_to_ios_mp4(path, job_id=job_id)
+    last_err = None
+    for attempt, fn in (
+        ("full", lambda: _transcode_to_ios_mp4(path, job_id=job_id)),
+        ("remux", lambda: _simple_remux_mp4(path, job_id=job_id)),
+        ("lite", lambda: _transcode_to_ios_mp4(path, job_id=job_id, max_height=480, crf=32)),
+    ):
+        try:
+            return fn(), None
+        except Exception as e:
+            last_err = e
+            app.logger.warning("iOS convert attempt %s failed: %s", attempt, e)
+            if not os.path.isfile(path):
+                # A successful attempt removes src_path; only continue if original still exists.
+                break
+
+    brief = _brief_technical(str(last_err or "convert failed"))
+    return path, (
+        f"Phone convert skipped ({brief}). Original file saved — "
+        "may not play in Photos; try VLC or Save file again."
+    )
 
 
 def _format_has_audio(f):
@@ -1406,6 +1491,46 @@ def _pick_info_formats(raw_formats, platform=None):
     return formats
 
 
+_SKIP_OUTPUT_SUFFIXES = (".part", ".tmp", ".ytdl", ".frag")
+
+
+def _pick_job_output_file(job_dir, kind):
+    """Pick the largest real media file — never a sidecar/thumbnail by listdir order."""
+    entries = []
+    for name in os.listdir(job_dir):
+        if name.startswith("."):
+            continue
+        low = name.lower()
+        if any(low.endswith(s) for s in _SKIP_OUTPUT_SUFFIXES):
+            continue
+        path = os.path.join(job_dir, name)
+        if not os.path.isfile(path):
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        if size <= 0:
+            continue
+        entries.append((size, name, ext))
+
+    if not entries:
+        raise RuntimeError("No output file was produced.")
+
+    if kind == "video":
+        pool = [e for e in entries if e[2] in (".mp4", ".m4v", ".mov", ".webm", ".mkv")] or entries
+    elif kind == "audio":
+        pool = [e for e in entries if e[2] in (".mp3", ".m4a", ".opus", ".ogg", ".wav", ".flac", ".aac")] or entries
+    elif kind == "thumbnail":
+        pool = [e for e in entries if e[2] in (".jpg", ".jpeg", ".png", ".webp")] or entries
+    elif kind == "subtitles":
+        pool = [e for e in entries if e[2] in (".vtt", ".srt", ".ass")] or entries
+    else:
+        pool = entries
+    return max(pool, key=lambda e: e[0])[1]
+
+
 def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform):
     job_dir = os.path.join(DOWNLOAD_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
@@ -1452,11 +1577,7 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
 
         download_with_fallback(url, build_opts)
 
-        files = [f for f in os.listdir(job_dir) if not f.startswith(".")]
-        if not files:
-            raise RuntimeError("No output file was produced.")
-
-        filename = files[0]
+        filename = _pick_job_output_file(job_dir, kind)
         # Keep a short readable name for the user's save dialog.
         safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", filename).strip(" .") or f"{kind}.bin"
         if safe_name != filename:
@@ -1465,13 +1586,16 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
                 os.replace(os.path.join(job_dir, filename), dest)
                 filename = safe_name
 
+        convert_warning = None
         if kind == "video":
             with JOBS_LOCK:
                 if JOBS.get(job_id):
                     JOBS[job_id]["status"] = "processing"
                     JOBS[job_id]["processing_stage"] = "Converting for phones…"
                     JOBS[job_id]["processing_percent"] = 0
-            filepath = _ensure_ios_playable_mp4(os.path.join(job_dir, filename), job_id=job_id)
+            filepath, convert_warning = _ensure_ios_playable_mp4(
+                os.path.join(job_dir, filename), job_id=job_id,
+            )
             filename = os.path.basename(filepath)
             if not filename.lower().endswith(".mp4"):
                 mp4_name = os.path.splitext(filename)[0] + ".mp4"
@@ -1482,15 +1606,16 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
 
         cleanup_path_later(job_dir)
 
+        finished = {
+            "status": "finished",
+            "percent": 100,
+            "filename": filename,
+            "download_url": f"/api/file/{job_id}",
+        }
+        if convert_warning:
+            finished["convert_warning"] = convert_warning
         with JOBS_LOCK:
-            JOBS[job_id] = {
-                "status": "finished",
-                "percent": 100,
-                "filename": filename,
-                # Path without the title — titles often contain ".." / unicode and
-                # break mobile browsers (and our old path safety check).
-                "download_url": f"/api/file/{job_id}",
-            }
+            JOBS[job_id] = finished
         record_event(platform, kind)
 
     except Exception as e:
@@ -1668,6 +1793,7 @@ def admin_logout():
 def health():
     return jsonify({
         "status": "ok",
+        "static_version": STATIC_VERSION,
         "cookies": bool(resolve_cookiefile()),
         "proxy": bool(YTDLP_PROXY),
         "proxy_configured": PROXY_STATUS["configured"],

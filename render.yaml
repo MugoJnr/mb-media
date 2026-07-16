@@ -12,7 +12,7 @@ services:
       - key: GUNICORN_THREADS
         value: "4"
       - key: TRANSCODE_MAX_HEIGHT
-        value: "720"
+        value: "540"
       - key: SECRET_KEY
         generateValue: true
       - key: ADMIN_PASSWORD
