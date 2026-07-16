@@ -969,7 +969,9 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
                 "status": "finished",
                 "percent": 100,
                 "filename": filename,
-                "download_url": f"/api/file/{job_id}/{quote(filename)}",
+                # Path without the title — titles often contain ".." / unicode and
+                # break mobile browsers (and our old path safety check).
+                "download_url": f"/api/file/{job_id}",
             }
         record_event(platform, kind)
 
@@ -1026,22 +1028,50 @@ def api_progress(job_id):
     return jsonify(job)
 
 
+def _resolve_job_filepath(job_id, filename=None):
+    """Resolve a download path safely under DOWNLOAD_DIR/<job_id>/."""
+    if not job_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", job_id):
+        return None, None
+    job_dir = os.path.realpath(os.path.join(DOWNLOAD_DIR, job_id))
+    root = os.path.realpath(DOWNLOAD_DIR)
+    if job_dir != root and not job_dir.startswith(root + os.sep):
+        return None, None
+    if not os.path.isdir(job_dir):
+        return None, None
+
+    if filename:
+        filename = unquote(filename or "").replace("\\", "/").split("/")[-1]
+        candidate = os.path.realpath(os.path.join(job_dir, filename))
+        if candidate.startswith(job_dir + os.sep) and os.path.isfile(candidate):
+            return candidate, os.path.basename(candidate)
+
+    with JOBS_LOCK:
+        stored = (JOBS.get(job_id) or {}).get("filename")
+    if stored:
+        candidate = os.path.realpath(os.path.join(job_dir, stored))
+        if candidate.startswith(job_dir + os.sep) and os.path.isfile(candidate):
+            return candidate, os.path.basename(candidate)
+
+    candidates = [f for f in os.listdir(job_dir) if not f.startswith(".")]
+    if len(candidates) == 1:
+        name = candidates[0]
+        return os.path.join(job_dir, name), name
+    return None, None
+
+
+@app.route("/api/file/<job_id>")
 @app.route("/api/file/<job_id>/<path:filename>")
-def serve_file(job_id, filename):
-    filename = unquote(filename or "")
-    if ".." in job_id or ".." in filename or not job_id or not filename:
-        abort(400)
-    job_dir = os.path.join(DOWNLOAD_DIR, job_id)
-    filepath = os.path.join(job_dir, filename)
-    # Fallback: if exact name missing, serve the only file in the job dir.
-    if not os.path.isfile(filepath) and os.path.isdir(job_dir):
-        candidates = [f for f in os.listdir(job_dir) if not f.startswith(".")]
-        if len(candidates) == 1:
-            filename = candidates[0]
-            filepath = os.path.join(job_dir, filename)
-    if not os.path.isfile(filepath):
+def serve_file(job_id, filename=None):
+    filepath, download_name = _resolve_job_filepath(job_id, filename)
+    if not filepath:
         abort(404)
-    return send_file(filepath, as_attachment=True, download_name=filename)
+    # ASCII fallback name avoids Content-Disposition issues on some mobile browsers.
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download_name).strip("._") or "download.bin"
+    return send_file(
+        filepath,
+        as_attachment=True,
+        download_name=download_name if download_name.isascii() else ascii_name,
+    )
 
 
 # ---------- Admin analytics ----------

@@ -566,11 +566,37 @@ if (urlInput) {
   });
 
   // ---------- Download manager ----------
-  function triggerFileDownload(downloadUrl) {
+  async function triggerFileDownload(downloadUrl) {
     if (isMobileDevice()) {
-      // iOS/Android browsers often ignore programmatic <a download>.
-      window.location.assign(downloadUrl);
-      return;
+      try {
+        const res = await fetch(downloadUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        const rawName = (res.headers.get('Content-Disposition') || '')
+          .match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)?.[1]
+          || 'download.bin';
+        const fileName = decodeURIComponent(rawName.replace(/"/g, '').trim()) || 'download.bin';
+        const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: fileName });
+          return;
+        }
+        const objectUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = objectUrl;
+        a.download = fileName;
+        a.rel = 'noopener';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+        return;
+      } catch (e) {
+        // Last resort: open file URL in a new tab (never replace this page).
+        window.open(downloadUrl, '_blank', 'noopener');
+        toast('Opened file in a new tab — use Share/Save there if needed.', 'info');
+        return;
+      }
     }
     const a = document.createElement('a');
     a.href = downloadUrl;
@@ -686,9 +712,16 @@ if (urlInput) {
             card.classList.add('success');
             cancelBtn.textContent = 'Save file';
             cancelBtn.classList.add('save-btn');
-            cancelBtn.onclick = (ev) => {
+            cancelBtn.onclick = async (ev) => {
               ev.preventDefault();
-              triggerFileDownload(p.download_url);
+              cancelBtn.disabled = true;
+              cancelBtn.textContent = isMobileDevice() ? 'Saving…' : 'Save file';
+              try {
+                await triggerFileDownload(p.download_url);
+              } finally {
+                cancelBtn.disabled = false;
+                cancelBtn.textContent = 'Save file';
+              }
             };
             toast(`${label} ready`, 'success');
             saveHistory({ title: label, url: payload.url, time: Date.now() });
