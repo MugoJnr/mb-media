@@ -84,6 +84,56 @@ function isMobileDevice() {
   return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
+function isIOS() {
+  return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+}
+
+function mimeFromFilename(name) {
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+  const map = {
+    mp4: 'video/mp4',
+    webm: 'video/webm',
+    m4a: 'audio/mp4',
+    mp3: 'audio/mpeg',
+    opus: 'audio/opus',
+    ogg: 'audio/ogg',
+    wav: 'audio/wav',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    png: 'image/png',
+    webp: 'image/webp',
+    vtt: 'text/vtt',
+    srt: 'application/x-subrip',
+  };
+  return map[ext] || 'application/octet-stream';
+}
+
+function parseDownloadFilename(contentDisposition, fallback = 'download.bin') {
+  const header = contentDisposition || '';
+  const star = header.match(/filename\*=(?:UTF-8''|utf-8'')([^;\n]+)/i);
+  if (star) {
+    try {
+      return decodeURIComponent(star[1].replace(/"/g, '').trim()) || fallback;
+    } catch (e) { /* fall through */ }
+  }
+  const plain = header.match(/filename="?([^";\n]+)"?/i);
+  if (plain) return plain[1].trim() || fallback;
+  return fallback;
+}
+
+function clickBlobDownload(blob, fileName) {
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = fileName;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+}
+
 // ---------- Cookies modal ----------
 const cookiesBtn = document.getElementById('cookiesBtn');
 const cookiesModal = document.getElementById('cookiesModal');
@@ -575,40 +625,51 @@ if (urlInput) {
   // ---------- Download manager ----------
   async function triggerFileDownload(downloadUrl) {
     if (isMobileDevice()) {
+      let res;
       try {
-        const res = await fetch(downloadUrl);
+        res = await fetch(downloadUrl);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const rawName = (res.headers.get('Content-Disposition') || '')
-          .match(/filename\*?=(?:UTF-8''|"?)([^";]+)/i)?.[1]
-          || 'download.bin';
-        const fileName = decodeURIComponent(rawName.replace(/"/g, '').trim()) || 'download.bin';
-        const file = new File([blob], fileName, { type: blob.type || 'application/octet-stream' });
-        if (navigator.canShare && navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], title: fileName });
-          return;
-        }
-        const objectUrl = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = objectUrl;
-        a.download = fileName;
-        a.rel = 'noopener';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
-        return;
       } catch (e) {
-        // Last resort: open file URL in a new tab (never replace this page).
-        window.open(downloadUrl, '_blank', 'noopener');
-        toast('Opened file in a new tab — use Share/Save there if needed.', 'info');
+        toast('Could not fetch the file — try Save file again in a moment.', 'error');
         return;
       }
+
+      const blob = await res.blob();
+      const fileName = parseDownloadFilename(res.headers.get('Content-Disposition'));
+      const mime = (blob.type && blob.type !== 'application/octet-stream')
+        ? blob.type
+        : mimeFromFilename(fileName);
+      const file = new File([blob], fileName, { type: mime });
+
+      // iOS / mobile: Web Share keeps the SPA in place (Save to Files, AirDrop, etc.).
+      if (typeof navigator.share === 'function') {
+        const canShareFiles = !navigator.canShare || navigator.canShare({ files: [file] });
+        if (canShareFiles) {
+          try {
+            await navigator.share({ files: [file], title: fileName });
+            return;
+          } catch (e) {
+            if (e && e.name === 'AbortError') return;
+          }
+        }
+      }
+
+      // Android and other mobile browsers: in-page blob download (no navigation).
+      if (!isIOS()) {
+        clickBlobDownload(blob.type === mime ? blob : new Blob([blob], { type: mime }), fileName);
+        return;
+      }
+
+      // iOS Chrome/Safari often open blob/video links in a new tab — stay on this page.
+      toast('Use the player below: tap ⋯ then Save Video, or tap Save file again for the share sheet.', 'info');
+      return;
     }
+
     const a = document.createElement('a');
     a.href = downloadUrl;
     a.download = '';
     a.rel = 'noopener';
+    a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
     a.remove();

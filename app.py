@@ -1,3 +1,4 @@
+import mimetypes
 import os
 import re
 import time
@@ -1268,10 +1269,15 @@ def serve_file(job_id, filename=None):
         abort(404)
     # ASCII fallback name avoids Content-Disposition issues on some mobile browsers.
     ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download_name).strip("._") or "download.bin"
+    safe_name = download_name if download_name.isascii() else ascii_name
+    mime, _ = mimetypes.guess_type(safe_name)
+    if not mime and safe_name.lower().endswith(".mp4"):
+        mime = "video/mp4"
     return send_file(
         filepath,
         as_attachment=True,
-        download_name=download_name if download_name.isascii() else ascii_name,
+        download_name=safe_name,
+        mimetype=mime or "application/octet-stream",
     )
 
 
