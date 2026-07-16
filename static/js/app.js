@@ -498,7 +498,7 @@ if (urlInput) {
       opt.value = f.format_id;
       opt.dataset.size = f.filesize_approx || '';
       const size = formatBytes(f.filesize_approx);
-      const tag = f.compatible ? ' · phone-friendly' : '';
+      const tag = f.compatible ? ' · phone-friendly' : (f.has_audio === false ? ' · may need remux' : '');
       opt.textContent = `${f.height}p ${f.ext}${tag}${size ? ' · ' + size : ''}`;
       videoQuality.appendChild(opt);
     });

@@ -828,7 +828,7 @@ def api_info():
         if entries:
             info = entries[0]
 
-    formats = _pick_info_formats(info.get("formats", []) or [])
+    formats = _pick_info_formats(info.get("formats", []) or [], platform)
 
     subtitles_available = bool(info.get("subtitles") or info.get("automatic_captions"))
 
@@ -956,43 +956,122 @@ def _acodec_is_aac(acodec):
     return a not in ("", "none") and ("mp4a" in a or "aac" in a)
 
 
-def _mobile_video_format_string(format_id=None):
-    """Prefer H.264 + AAC in MP4 so phones and desktop players can open the file."""
-    compatible = (
-        "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
-        "bestvideo[vcodec*=avc1][height<=1080]+bestaudio[acodec*=mp4a]/"
-        "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
-        "best[ext=mp4][height<=1080]/best[height<=1080]/best"
-    )
-    if format_id:
-        # User pick may be video-only; always attach compatible audio when possible.
+def _format_has_audio(f):
+    return f.get("acodec") not in (None, "none")
+
+
+def _is_hls_format(f):
+    ext = (f.get("ext") or "").lower()
+    proto = (f.get("protocol") or "").lower()
+    return ext in ("m3u8", "m3u8_native") or "m3u8" in proto
+
+
+def _platform_key(platform):
+    s = (platform or "").lower()
+    if "youtube" in s:
+        return "youtube"
+    if "tiktok" in s:
+        return "tiktok"
+    if "instagram" in s:
+        return "instagram"
+    if s.startswith("x") or "twitter" in s:
+        return "x"
+    if "facebook" in s:
+        return "facebook"
+    if "vimeo" in s:
+        return "vimeo"
+    if "dailymotion" in s:
+        return "dailymotion"
+    return "default"
+
+
+def _mobile_video_format_string(format_id=None, platform=None):
+    """Prefer phone-playable H.264 + audio in MP4 across all platforms."""
+    pkey = _platform_key(platform)
+
+    if pkey == "tiktok":
+        auto = (
+            "download/"
+            "best[ext=mp4][vcodec^=avc1][acodec!=none][height<=1080]/"
+            "best[ext=mp4][vcodec*=avc1][acodec!=none][height<=1080]/"
+            "best[ext=mp4][acodec!=none][height<=1080]/"
+            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio/"
+            "best[height<=1080]/best"
+        )
+    elif pkey == "instagram":
+        auto = (
+            "best[ext=mp4][vcodec^=avc1][acodec!=none][height<=1080]/"
+            "best[ext=mp4][vcodec*=avc1][acodec!=none][height<=1080]/"
+            "best[ext=mp4][acodec!=none][height<=1080]/"
+            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/"
+            "bestvideo[ext=mp4][height<=1080]+bestaudio/"
+            "best[height<=1080]/best"
+        )
+    elif pkey in ("x", "facebook", "vimeo", "dailymotion", "default"):
+        auto = (
+            "best[ext=mp4][vcodec^=avc1][acodec!=none][height<=1080]/"
+            "best[ext=mp4][acodec!=none][height<=1080]/"
+            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
+            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
+            "best[ext=mp4][height<=1080]/best[height<=1080]/best"
+        )
+    else:
+        # YouTube (DASH-first)
+        auto = (
+            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
+            "bestvideo[vcodec*=avc1][height<=1080]+bestaudio[acodec*=mp4a]/"
+            "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
+            "best[ext=mp4][height<=1080]/best[height<=1080]/best"
+        )
+
+    if not format_id:
+        return auto
+
+    # Progressive sites: try the picked stream as-is first (often already muxed).
+    if pkey in ("tiktok", "instagram", "x", "facebook", "vimeo", "dailymotion", "default"):
         return (
+            f"{format_id}/"
             f"{format_id}+bestaudio[acodec^=mp4a]/"
             f"{format_id}+bestaudio[ext=m4a]/"
             f"{format_id}+bestaudio/"
-            f"{format_id}/"
-            f"{compatible}"
+            f"{auto}"
         )
-    return compatible
+    return (
+        f"{format_id}+bestaudio[acodec^=mp4a]/"
+        f"{format_id}+bestaudio[ext=m4a]/"
+        f"{format_id}+bestaudio/"
+        f"{format_id}/"
+        f"{auto}"
+    )
 
 
-def _pick_info_formats(raw_formats):
-    """Build a short quality list biased toward mobile-playable H.264/MP4."""
+def _pick_info_formats(raw_formats, platform=None):
+    """Build a short quality list biased toward mobile-playable MP4 with audio."""
+    pkey = _platform_key(platform)
     candidates = []
     for f in raw_formats or []:
         if f.get("vcodec") in (None, "none"):
             continue
         height = f.get("height")
         if not height:
+            res = f.get("resolution") or ""
+            m = re.search(r"(\d{3,4})", str(res))
+            height = int(m.group(1)) if m else None
+        if not height:
             continue
-        candidates.append(f)
+        entry = dict(f)
+        entry["height"] = height
+        candidates.append(entry)
 
     def score(f):
-        vcodec = f.get("vcodec") or ""
-        ext = (f.get("ext") or "").lower()
-        h264 = 2 if _vcodec_is_h264(vcodec) else 0
-        mp4 = 1 if ext == "mp4" else 0
-        return (height or 0, h264, mp4)
+        h = f.get("height") or 0
+        h264 = 3 if _vcodec_is_h264(f.get("vcodec")) else 0
+        aac = 2 if _acodec_is_aac(f.get("acodec")) else 0
+        has_aud = 2 if _format_has_audio(f) else 0
+        mp4 = 1 if (f.get("ext") or "").lower() == "mp4" else 0
+        hls_penalty = -3 if _is_hls_format(f) else 0
+        tiktok_dl = 4 if pkey == "tiktok" and str(f.get("format_id") or "") == "download" else 0
+        return (h, h264 + aac + has_aud + mp4 + tiktok_dl + hls_penalty)
 
     candidates.sort(key=score, reverse=True)
 
@@ -1002,17 +1081,18 @@ def _pick_info_formats(raw_formats):
         height = f["height"]
         if height in seen_heights:
             continue
-        # Prefer H.264 when available for this height; otherwise take best remaining.
         same_h = [x for x in candidates if x.get("height") == height]
-        pick = next((x for x in same_h if _vcodec_is_h264(x.get("vcodec"))), same_h[0])
+        pick = max(same_h, key=score)
         seen_heights.add(height)
         ext = pick.get("ext") or "mp4"
-        compatible = _vcodec_is_h264(pick.get("vcodec")) and ext == "mp4"
+        has_audio = _format_has_audio(pick)
+        compatible = _vcodec_is_h264(pick.get("vcodec")) and ext == "mp4" and has_audio
         formats.append({
             "format_id": pick["format_id"],
             "height": height,
             "ext": ext,
             "compatible": compatible,
+            "has_audio": has_audio,
             "filesize_approx": pick.get("filesize") or pick.get("filesize_approx"),
         })
         if len(formats) >= 8:
@@ -1031,9 +1111,12 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
         opts["progress_hooks"] = [make_progress_hook(job_id)]
 
         if kind == "video":
-            opts["format"] = _mobile_video_format_string(format_id)
+            opts["format"] = _mobile_video_format_string(format_id, platform)
             opts["merge_output_format"] = "mp4"
-            opts["format_sort"] = ["vcodec:h264", "acodec:mp4a", "ext:mp4:m4a", "res:1080", "size"]
+            opts["format_sort"] = [
+                "hasvid", "hasaud", "vcodec:h264", "acodec:mp4a",
+                "ext:mp4:m4a", "proto:https", "res:1080", "size",
+            ]
             opts["postprocessors"] = [{
                 "key": "FFmpegVideoRemuxer",
                 "preferedformat": "mp4",
