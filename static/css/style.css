@@ -291,16 +291,34 @@ img { max-width: 100%; display: block; }
 
 .status-banner {
   display: flex;
-  align-items: flex-start;
-  gap: 12px;
+  align-items: center;
+  gap: 14px;
   max-width: 620px;
   margin: 18px auto 0;
-  padding: 10px 12px;
+  padding: 12px 14px;
   text-align: left;
   background: color-mix(in srgb, var(--gold) 10%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--border));
   border-radius: var(--radius-sm);
   animation: fadeUp 0.5s ease 0.2s both;
+}
+.status-banner--youtube {
+  background: color-mix(in srgb, #ff0000 8%, var(--surface));
+  border-color: color-mix(in srgb, #ff0000 35%, var(--border));
+}
+.status-banner-icon {
+  flex-shrink: 0;
+  width: 56px;
+  height: auto;
+  border-radius: 8px;
+  display: block;
+}
+.status-banner-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 .status-banner-label {
   flex-shrink: 0;
@@ -309,8 +327,8 @@ img { max-width: 100%; display: block; }
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--bg);
-  background: var(--gold);
+  color: #fff;
+  background: #c00;
   border-radius: 999px;
   padding: 4px 9px;
   line-height: 1.2;
@@ -323,10 +341,12 @@ img { max-width: 100%; display: block; }
 }
 @media (max-width: 560px) {
   .status-banner {
-    flex-direction: row;
-    align-items: flex-start;
-    gap: 10px;
+    gap: 12px;
     margin-top: 14px;
+    padding: 12px;
+  }
+  .status-banner-icon {
+    width: 48px;
   }
 }
 

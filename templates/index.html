@@ -20,9 +20,12 @@
       <div id="status" role="status" aria-live="polite"></div>
     </div>
 
-    <div class="status-banner" role="status">
-      <span class="status-banner-label">Notice</span>
-      <p>YouTube may be limited right now. TikTok, Instagram, and others still work.</p>
+    <div class="status-banner status-banner--youtube" role="status">
+      <img class="status-banner-icon" src="{{ url_for('static', filename='img/youtube-down.png') }}" width="56" height="40" alt="YouTube is down">
+      <div class="status-banner-body">
+        <span class="status-banner-label">YouTube down</span>
+        <p>YouTube downloads aren’t available right now. TikTok, Instagram, and others still work.</p>
+      </div>
     </div>
 
     <div class="platform-orbit" aria-hidden="true">
