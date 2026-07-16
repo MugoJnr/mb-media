@@ -11,45 +11,8 @@
   <div class="container">
     <div id="historyList" style="max-width:640px; margin:0 auto; display:flex; flex-direction:column; gap:10px;"></div>
     <div style="text-align:center; margin-top:24px;">
-      <button class="btn btn-ghost" id="clearHistoryBtn">Clear history</button>
+      <button class="btn btn-ghost" id="clearHistoryBtn" type="button">Clear history</button>
     </div>
   </div>
 </section>
-{% endblock %}
-{% block scripts %}
-<script>
-function renderHistory() {
-  const list = document.getElementById('historyList');
-  const hist = JSON.parse(localStorage.getItem('mb_history') || '[]');
-  list.innerHTML = '';
-  if (hist.length === 0) {
-    list.innerHTML = '<p style="color:var(--muted); text-align:center; font-size:0.9rem;">No downloads yet. Your history will appear here after you download something.</p>';
-    return;
-  }
-  hist.forEach(item => {
-    const date = new Date(item.time).toLocaleString();
-    const row = document.createElement('div');
-    row.className = 'card';
-    row.style.padding = '14px 18px';
-    const safeTitle = (item.title || 'Untitled')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-    row.innerHTML = `
-      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-        <div style="overflow:hidden; min-width:0;">
-          <div style="font-size:0.9rem; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${safeTitle}</div>
-          <div style="font-size:0.75rem; color:var(--muted); margin-top:2px;">${date}</div>
-        </div>
-      </div>
-    `;
-    list.appendChild(row);
-  });
-}
-document.getElementById('clearHistoryBtn').addEventListener('click', () => {
-  localStorage.removeItem('mb_history');
-  renderHistory();
-});
-renderHistory();
-</script>
 {% endblock %}

@@ -673,6 +673,18 @@ select {
   color: var(--gold);
   font-weight: 600;
 }
+.job-player {
+  display: block;
+  width: 100%;
+  max-height: 280px;
+  margin-top: 12px;
+  border-radius: var(--radius-sm);
+  background: #000;
+}
+audio.job-player {
+  max-height: none;
+  height: 40px;
+}
 .progress-track {
   height: 6px;
   background: var(--surface-2);

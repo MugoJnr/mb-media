@@ -2,6 +2,12 @@
 // MB MEDIA — app.js
 // ============================================
 
+// ---------- Footer year (CSP blocks inline scripts) ----------
+(function initYear() {
+  const yearEl = document.getElementById('year');
+  if (yearEl) yearEl.textContent = String(new Date().getFullYear());
+})();
+
 // ---------- Theme ----------
 const themeToggle = document.getElementById('themeToggle');
 const root = document.documentElement;
@@ -647,13 +653,30 @@ if (urlInput) {
     const cancelBtn = card.querySelector('.cancel-btn');
 
     let cancelled = false;
+    let finished = false;
     let poll = null;
-    cancelBtn.addEventListener('click', () => {
+    let downloadUrl = null;
+
+    const onActionClick = async (ev) => {
+      ev.preventDefault();
+      if (finished) {
+        if (!downloadUrl) return;
+        cancelBtn.disabled = true;
+        cancelBtn.textContent = isMobileDevice() ? 'Saving…' : 'Save file';
+        try {
+          await triggerFileDownload(downloadUrl);
+        } finally {
+          cancelBtn.disabled = false;
+          cancelBtn.textContent = 'Save file';
+        }
+        return;
+      }
       cancelled = true;
       if (poll) clearInterval(poll);
       card.remove();
       restoreEmptyState();
-    });
+    };
+    cancelBtn.addEventListener('click', onActionClick);
 
     setDownloadControlsDisabled(true);
 
@@ -705,27 +728,19 @@ if (urlInput) {
             eta.textContent = p.eta ? `ETA ${p.eta}` : '';
           } else if (p.status === 'finished') {
             clearInterval(poll);
+            finished = true;
+            downloadUrl = p.download_url;
             fill.style.width = '100%';
             pct.textContent = '100%';
             speed.textContent = '';
-            eta.textContent = isMobileDevice() ? 'Tap Save file' : 'Ready';
+            eta.textContent = isMobileDevice() ? 'Tap Save file' : 'Ready — play below';
             card.classList.add('success');
             cancelBtn.textContent = 'Save file';
             cancelBtn.classList.add('save-btn');
-            cancelBtn.onclick = async (ev) => {
-              ev.preventDefault();
-              cancelBtn.disabled = true;
-              cancelBtn.textContent = isMobileDevice() ? 'Saving…' : 'Save file';
-              try {
-                await triggerFileDownload(p.download_url);
-              } finally {
-                cancelBtn.disabled = false;
-                cancelBtn.textContent = 'Save file';
-              }
-            };
             toast(`${label} ready`, 'success');
             saveHistory({ title: label, url: payload.url, time: Date.now() });
-            if (!isMobileDevice()) triggerFileDownload(p.download_url);
+            mountJobPlayer(card, downloadUrl, payload.type);
+            if (!isMobileDevice()) triggerFileDownload(downloadUrl);
           } else if (p.status === 'error') {
             clearInterval(poll);
             card.classList.add('error');
@@ -750,6 +765,32 @@ if (urlInput) {
       toast('Network error while starting download', 'error');
     } finally {
       setDownloadControlsDisabled(false);
+    }
+  }
+
+  async function mountJobPlayer(card, downloadUrl, kind) {
+    if (!downloadUrl || (kind !== 'video' && kind !== 'audio')) return;
+    if (card.querySelector('.job-player')) return;
+    try {
+      const res = await fetch(downloadUrl);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const player = document.createElement(kind === 'audio' ? 'audio' : 'video');
+      player.className = 'job-player';
+      player.controls = true;
+      player.playsInline = true;
+      player.preload = 'metadata';
+      player.src = objectUrl;
+      if (kind === 'video') {
+        player.setAttribute('controlsList', 'nodownload');
+      }
+      card.appendChild(player);
+      player.addEventListener('error', () => {
+        toast('Preview player could not open this file — use Save file instead.', 'info');
+      }, { once: true });
+    } catch (e) {
+      /* Player is optional; Save file still works */
     }
   }
 
@@ -891,3 +932,49 @@ if (contactForm) {
     }
   });
 }
+
+// ---------- History page (CSP blocks inline scripts — must live in app.js) ----------
+(function initHistoryPage() {
+  const list = document.getElementById('historyList');
+  if (!list) return;
+
+  function renderHistory() {
+    let hist = [];
+    try {
+      hist = JSON.parse(localStorage.getItem('mb_history') || '[]');
+      if (!Array.isArray(hist)) hist = [];
+    } catch (e) {
+      hist = [];
+    }
+    list.innerHTML = '';
+    if (hist.length === 0) {
+      list.innerHTML = '<p style="color:var(--muted); text-align:center; font-size:0.9rem;">No downloads yet. Your history will appear here after a download finishes on this browser.</p>';
+      return;
+    }
+    hist.forEach((item) => {
+      const date = new Date(item.time).toLocaleString();
+      const row = document.createElement('div');
+      row.className = 'card';
+      row.style.padding = '14px 18px';
+      row.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+          <div style="overflow:hidden; min-width:0;">
+            <div style="font-size:0.9rem; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(item.title || 'Untitled')}</div>
+            <div style="font-size:0.75rem; color:var(--muted); margin-top:2px;">${escapeHtml(date)}</div>
+          </div>
+        </div>
+      `;
+      list.appendChild(row);
+    });
+  }
+
+  const clearBtn = document.getElementById('clearHistoryBtn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      localStorage.removeItem('mb_history');
+      renderHistory();
+      toast('History cleared', 'success');
+    });
+  }
+  renderHistory();
+})();
