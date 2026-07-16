@@ -920,10 +920,6 @@ def make_progress_hook(job_id):
                 job["percent"] = 100
                 job["speed"] = ""
                 job["eta"] = ""
-                if job.get("kind") == "video":
-                    job["status"] = "processing"
-                    job["processing_stage"] = "Preparing for phones…"
-                    job["processing_percent"] = 0
     return hook
 
 
@@ -941,7 +937,7 @@ def _human_eta(eta):
     return f"{m}m {s}s" if m else f"{s}s"
 
 
-def run_download_job(job_id, url, kind, format_id=None, audio_quality=None, audio_format=None, cookiefile=None):
+def run_download_job(job_id, url, kind, format_id=None, audio_quality=None, audio_format=None, cookiefile=None, convert_after=False):
     platform = detect_platform(url)
 
     # Wait our turn in the queue, updating position as others finish.
@@ -995,7 +991,7 @@ def run_download_job(job_id, url, kind, format_id=None, audio_quality=None, audi
         except Exception:
             pass  # if the pre-check itself fails, fall through and let the real download attempt surface the error
 
-        _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform)
+        _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform, convert_after=convert_after)
     finally:
         DOWNLOAD_SEMAPHORE.release()
 
@@ -1329,6 +1325,109 @@ def _ensure_ios_playable_mp4(path, job_id=None):
     )
 
 
+def _prepare_video_fast_path(path):
+    """Finish immediately after download — quick faststart only when already iOS-playable."""
+    if not os.path.isfile(path):
+        return path, False, None
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".mp4", ".m4v", ".mov", ".webm", ".mkv"):
+        return path, True, None
+
+    info = _probe_media_file(path)
+    phone_compatible = bool(info and _is_ios_playable(info))
+
+    if phone_compatible:
+        try:
+            _mp4_faststart(path, job_id=None)
+        except Exception as e:
+            app.logger.warning(f"faststart remux skipped: {e}")
+        if not path.lower().endswith(".mp4"):
+            mp4_path = os.path.splitext(path)[0] + ".mp4"
+            os.replace(path, mp4_path)
+            return mp4_path, True, None
+        return path, True, None
+
+    return path, False, (
+        "May not play on some iPhones — tap Make phone-friendly to convert."
+    )
+
+
+def _finish_job(job_id, job_dir, filename, kind, platform, *, convert_warning=None, phone_compatible=None):
+    cleanup_path_later(job_dir)
+    finished = {
+        "status": "finished",
+        "percent": 100,
+        "filename": filename,
+        "download_url": f"/api/file/{job_id}",
+        "kind": kind,
+    }
+    if phone_compatible is not None:
+        finished["phone_compatible"] = phone_compatible
+    if convert_warning:
+        finished["convert_warning"] = convert_warning
+    with JOBS_LOCK:
+        JOBS[job_id] = finished
+    record_event(platform, kind)
+
+
+def run_convert_job(job_id):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job or job.get("status") != "finished" or job.get("kind") != "video":
+            return
+        if job.get("phone_compatible") and not job.get("convert_warning"):
+            return
+        filename = job.get("filename")
+        kind = job.get("kind", "video")
+        job["status"] = "processing"
+        job["processing_stage"] = "Converting for phones…"
+        job["processing_percent"] = 0
+
+    job_dir = os.path.join(DOWNLOAD_DIR, job_id)
+    filepath = os.path.join(job_dir, filename)
+    if not os.path.isfile(filepath):
+        with JOBS_LOCK:
+            JOBS[job_id] = {"status": "error", "error": "File no longer available for convert."}
+        return
+
+    try:
+        new_path, convert_warning = _ensure_ios_playable_mp4(filepath, job_id=job_id)
+        filename = os.path.basename(new_path)
+        if not filename.lower().endswith(".mp4"):
+            mp4_name = os.path.splitext(filename)[0] + ".mp4"
+            mp4_path = os.path.join(job_dir, mp4_name)
+            if not os.path.exists(mp4_path):
+                os.replace(new_path, mp4_path)
+            filename = mp4_name
+
+        finished = {
+            "status": "finished",
+            "percent": 100,
+            "filename": filename,
+            "download_url": f"/api/file/{job_id}",
+            "kind": kind,
+            "phone_compatible": convert_warning is None,
+        }
+        if convert_warning:
+            finished["convert_warning"] = convert_warning
+        with JOBS_LOCK:
+            JOBS[job_id] = finished
+    except Exception as e:
+        app.logger.warning(f"convert job failed: {e}")
+        with JOBS_LOCK:
+            prev = JOBS.get(job_id) or {}
+            JOBS[job_id] = {
+                "status": "finished",
+                "percent": 100,
+                "filename": prev.get("filename", filename),
+                "download_url": f"/api/file/{job_id}",
+                "kind": kind,
+                "phone_compatible": False,
+                "convert_warning": f"Phone convert failed — original file still available. {_brief_technical(str(e))}",
+            }
+
+
 def _format_has_audio(f):
     return f.get("acodec") not in (None, "none")
 
@@ -1531,7 +1630,7 @@ def _pick_job_output_file(job_dir, kind):
     return max(pool, key=lambda e: e[0])[1]
 
 
-def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform):
+def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform, convert_after=False):
     job_dir = os.path.join(DOWNLOAD_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
     outtmpl = os.path.join(job_dir, "%(title).80s.%(ext)s")
@@ -1587,36 +1686,34 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
                 filename = safe_name
 
         convert_warning = None
+        phone_compatible = None
         if kind == "video":
-            with JOBS_LOCK:
-                if JOBS.get(job_id):
-                    JOBS[job_id]["status"] = "processing"
-                    JOBS[job_id]["processing_stage"] = "Converting for phones…"
-                    JOBS[job_id]["processing_percent"] = 0
-            filepath, convert_warning = _ensure_ios_playable_mp4(
-                os.path.join(job_dir, filename), job_id=job_id,
-            )
-            filename = os.path.basename(filepath)
-            if not filename.lower().endswith(".mp4"):
+            filepath = os.path.join(job_dir, filename)
+            if convert_after:
+                with JOBS_LOCK:
+                    if JOBS.get(job_id):
+                        JOBS[job_id]["status"] = "processing"
+                        JOBS[job_id]["processing_stage"] = "Converting for phones…"
+                        JOBS[job_id]["processing_percent"] = 0
+                filepath, convert_warning = _ensure_ios_playable_mp4(filepath, job_id=job_id)
+                filename = os.path.basename(filepath)
+                phone_compatible = convert_warning is None
+            else:
+                filepath, phone_compatible, convert_warning = _prepare_video_fast_path(filepath)
+                filename = os.path.basename(filepath)
+            if not filename.lower().endswith(".mp4") and kind == "video":
                 mp4_name = os.path.splitext(filename)[0] + ".mp4"
                 mp4_path = os.path.join(job_dir, mp4_name)
-                if not os.path.exists(mp4_path):
-                    os.replace(filepath, mp4_path)
+                src = os.path.join(job_dir, filename)
+                if os.path.isfile(src) and not os.path.exists(mp4_path):
+                    os.replace(src, mp4_path)
                 filename = mp4_name
 
-        cleanup_path_later(job_dir)
-
-        finished = {
-            "status": "finished",
-            "percent": 100,
-            "filename": filename,
-            "download_url": f"/api/file/{job_id}",
-        }
-        if convert_warning:
-            finished["convert_warning"] = convert_warning
-        with JOBS_LOCK:
-            JOBS[job_id] = finished
-        record_event(platform, kind)
+        _finish_job(
+            job_id, job_dir, filename, kind, platform,
+            convert_warning=convert_warning,
+            phone_compatible=phone_compatible,
+        )
 
     except Exception as e:
         shutil.rmtree(job_dir, ignore_errors=True)
@@ -1635,6 +1732,7 @@ def api_download():
     audio_quality = data.get("audio_quality")
     audio_format = data.get("audio_format")
     cookie_token = data.get("cookie_token")
+    convert_after = bool(data.get("convert")) or request.args.get("convert") in ("1", "true", "yes")
 
     if not url:
         return jsonify({"error": "No URL provided."}), 400
@@ -1654,12 +1752,35 @@ def api_download():
 
     thread = threading.Thread(
         target=run_download_job,
-        args=(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile),
+        args=(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, convert_after),
         daemon=True,
     )
     thread.start()
 
     return jsonify({"job_id": job_id, "normalized_url": url, "url_fixes": url_fixes})
+
+
+@app.route("/api/convert/<job_id>", methods=["POST"])
+@limiter.limit("20 per hour")
+def api_convert(job_id):
+    if not job_id or not re.fullmatch(r"[0-9a-fA-F-]{36}", job_id):
+        return jsonify({"error": "Invalid job id."}), 400
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return jsonify({"error": "Unknown job."}), 404
+        if job.get("kind") != "video":
+            return jsonify({"error": "Only video jobs can be converted."}), 400
+        if job.get("status") == "processing":
+            return jsonify({"status": "processing", "message": "Convert already in progress."}), 409
+        if job.get("status") != "finished":
+            return jsonify({"error": "Job is not ready for convert."}), 400
+        if job.get("phone_compatible") and not job.get("convert_warning"):
+            return jsonify({"status": "finished", "message": "Already phone-friendly.", "phone_compatible": True})
+
+    thread = threading.Thread(target=run_convert_job, args=(job_id,), daemon=True)
+    thread.start()
+    return jsonify({"status": "processing", "job_id": job_id})
 
 
 @app.route("/api/progress/<job_id>")

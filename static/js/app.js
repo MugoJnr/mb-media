@@ -503,7 +503,7 @@ if (urlInput) {
   function formatOptionTag(f) {
     if (f.compatible) return ' · phone-friendly';
     if (f.has_audio === false) return ' · video only — may remux';
-    return ' · will convert for phones';
+    return ' · may need phone convert';
   }
 
   // ---------- Clipboard ----------
@@ -786,6 +786,38 @@ if (urlInput) {
     } catch (e) { /* ignore */ }
   }
 
+  function ensurePhoneFriendlyBtn(card, jobId, resumePoll) {
+    if (card.querySelector('.phone-btn')) return;
+    const actions = card.querySelector('.job-actions');
+    if (!actions) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'phone-btn';
+    btn.textContent = 'Make phone-friendly';
+    btn.addEventListener('click', async (ev) => {
+      ev.preventDefault();
+      btn.disabled = true;
+      btn.textContent = 'Starting…';
+      try {
+        const res = await fetch(`/api/convert/${jobId}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok && res.status !== 409) {
+          toast(data.error || 'Could not start phone convert', 'error');
+          btn.disabled = false;
+          btn.textContent = 'Make phone-friendly';
+          return;
+        }
+        btn.remove();
+        resumePoll();
+      } catch (e) {
+        toast('Network error starting convert', 'error');
+        btn.disabled = false;
+        btn.textContent = 'Make phone-friendly';
+      }
+    });
+    actions.insertBefore(btn, actions.firstChild);
+  }
+
   async function startDownload(payload, label) {
     const card = createJobCard(label);
     const fill = card.querySelector('.progress-fill');
@@ -915,7 +947,7 @@ if (urlInput) {
         toast('Lost connection — refresh and retry', 'error');
       };
 
-      poll = setInterval(async () => {
+      const pollOnce = async () => {
         if (cancelled) { clearInterval(poll); return; }
         try {
           const controller = new AbortController();
@@ -988,8 +1020,16 @@ if (urlInput) {
             if (p.convert_warning) {
               toast(truncateError(p.convert_warning, 200), 'info');
             }
+            if (payload.type === 'video' && p.phone_compatible === false) {
+              ensurePhoneFriendlyBtn(card, jobId, () => {
+                finished = false;
+                lastKnownStatus = 'processing';
+                pollFailures = 0;
+                poll = setInterval(pollOnce, POLL_INTERVAL_MS);
+              });
+            }
             saveHistory({ title: label, url: payload.url, time: Date.now() });
-            // Defer player prefetch so other jobs' progress polls keep getting worker time.
+            card._fileCache = null;
             setTimeout(() => {
               mountJobPlayer(card, downloadUrl, payload.type).then((cache) => {
                 if (cache) fileCache = cache;
@@ -1017,7 +1057,9 @@ if (urlInput) {
           }
           showPollFatal();
         }
-      }, POLL_INTERVAL_MS);
+      };
+
+      poll = setInterval(pollOnce, POLL_INTERVAL_MS);
     } catch (e) {
       card.classList.add('error');
       pct.textContent = 'Network error';

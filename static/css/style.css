@@ -673,6 +673,10 @@ select {
   color: var(--gold);
   font-weight: 600;
 }
+.job-actions .phone-btn {
+  color: var(--teal);
+  font-weight: 500;
+}
 .job-player {
   display: block;
   width: 100%;
