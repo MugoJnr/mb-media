@@ -134,6 +134,58 @@ function clickBlobDownload(blob, fileName) {
   setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
 }
 
+async function fetchFileBlob(downloadUrl, { cached, onProgress, timeoutMs = 300000 } = {}) {
+  if (cached && cached.blob) {
+    return cached;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(downloadUrl, { signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e && e.name === 'AbortError') {
+      throw new Error('Save timed out — file may be large. Try again on Wi‑Fi.');
+    }
+    throw e;
+  }
+
+  const total = Number(res.headers.get('Content-Length')) || 0;
+  const fileName = parseDownloadFilename(res.headers.get('Content-Disposition'));
+
+  if (!res.body || !total || typeof onProgress !== 'function') {
+    const blob = await res.blob();
+    clearTimeout(timeoutId);
+    const mime = (blob.type && blob.type !== 'application/octet-stream')
+      ? blob.type
+      : mimeFromFilename(fileName);
+    return { blob, fileName, mime };
+  }
+
+  const reader = res.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    onProgress(Math.min(99, Math.round((received / total) * 100)));
+  }
+  clearTimeout(timeoutId);
+  onProgress(100);
+  const blob = new Blob(chunks, {
+    type: res.headers.get('Content-Type') || mimeFromFilename(fileName),
+  });
+  const mime = (blob.type && blob.type !== 'application/octet-stream')
+    ? blob.type
+    : mimeFromFilename(fileName);
+  return { blob, fileName, mime };
+}
+
 // ---------- Cookies modal ----------
 const cookiesBtn = document.getElementById('cookiesBtn');
 const cookiesModal = document.getElementById('cookiesModal');
@@ -623,22 +675,17 @@ if (urlInput) {
   });
 
   // ---------- Download manager ----------
-  async function triggerFileDownload(downloadUrl) {
+  async function triggerFileDownload(downloadUrl, fileCache, onProgress) {
     if (isMobileDevice()) {
-      let res;
+      let fileData;
       try {
-        res = await fetch(downloadUrl);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        fileData = await fetchFileBlob(downloadUrl, { cached: fileCache, onProgress });
       } catch (e) {
-        toast('Could not fetch the file — try Save file again in a moment.', 'error');
-        return;
+        toast(e.message || 'Could not fetch the file — try Save file again in a moment.', 'error');
+        return false;
       }
 
-      const blob = await res.blob();
-      const fileName = parseDownloadFilename(res.headers.get('Content-Disposition'));
-      const mime = (blob.type && blob.type !== 'application/octet-stream')
-        ? blob.type
-        : mimeFromFilename(fileName);
+      const { blob, fileName, mime } = fileData;
       const file = new File([blob], fileName, { type: mime });
 
       // iOS / mobile: Web Share keeps the SPA in place (Save to Files, AirDrop, etc.).
@@ -647,9 +694,9 @@ if (urlInput) {
         if (canShareFiles) {
           try {
             await navigator.share({ files: [file], title: fileName });
-            return;
+            return true;
           } catch (e) {
-            if (e && e.name === 'AbortError') return;
+            if (e && e.name === 'AbortError') return true;
           }
         }
       }
@@ -657,12 +704,12 @@ if (urlInput) {
       // Android and other mobile browsers: in-page blob download (no navigation).
       if (!isIOS()) {
         clickBlobDownload(blob.type === mime ? blob : new Blob([blob], { type: mime }), fileName);
-        return;
+        return true;
       }
 
       // iOS Chrome/Safari often open blob/video links in a new tab — stay on this page.
       toast('Use the player below: tap ⋯ then Save Video, or tap Save file again for the share sheet.', 'info');
-      return;
+      return false;
     }
 
     const a = document.createElement('a');
@@ -673,6 +720,7 @@ if (urlInput) {
     document.body.appendChild(a);
     a.click();
     a.remove();
+    return true;
   }
 
   function createJobCard(label) {
@@ -718,6 +766,7 @@ if (urlInput) {
     let finished = false;
     let poll = null;
     let downloadUrl = null;
+    let fileCache = null;
 
     const onActionClick = async (ev) => {
       ev.preventDefault();
@@ -725,11 +774,22 @@ if (urlInput) {
         if (!downloadUrl) return;
         cancelBtn.disabled = true;
         cancelBtn.textContent = isMobileDevice() ? 'Saving…' : 'Save file';
+        const updateSaveProgress = (p) => {
+          if (!isMobileDevice()) return;
+          fill.style.width = `${p}%`;
+          pct.textContent = p >= 100 ? 'Opening share…' : `Saving… ${p}%`;
+          eta.textContent = p >= 100 ? '' : 'Keep this tab open';
+        };
         try {
-          await triggerFileDownload(downloadUrl);
+          await triggerFileDownload(downloadUrl, fileCache || card._fileCache, updateSaveProgress);
         } finally {
           cancelBtn.disabled = false;
           cancelBtn.textContent = 'Save file';
+          if (finished) {
+            fill.style.width = '100%';
+            pct.textContent = '100%';
+            eta.textContent = isMobileDevice() ? 'Tap Save file' : 'Ready — play below';
+          }
         }
         return;
       }
@@ -780,6 +840,21 @@ if (urlInput) {
             pct.textContent = 'Checking file…';
             speed.textContent = '';
             eta.textContent = '';
+          } else if (p.status === 'processing') {
+            card.classList.remove('queued');
+            const stage = p.processing_stage || 'Preparing for iPhone…';
+            const procPct = p.processing_percent;
+            if (procPct != null && procPct > 0) {
+              fill.style.width = `${Math.min(procPct, 99)}%`;
+              fill.style.background = 'var(--gold)';
+              pct.textContent = `${stage} ${Math.round(procPct)}%`;
+            } else {
+              fill.style.width = '100%';
+              fill.style.background = 'var(--gold)';
+              pct.textContent = stage;
+            }
+            speed.textContent = '';
+            eta.textContent = 'May take a few minutes';
           } else if (p.status === 'downloading') {
             card.classList.remove('queued');
             const pctVal = p.percent || 0;
@@ -787,7 +862,7 @@ if (urlInput) {
             fill.style.background = pctVal >= 90 ? 'var(--teal)' : 'var(--gold)';
             pct.textContent = `${pctVal.toFixed(0)}%`;
             speed.textContent = p.speed || '';
-            eta.textContent = p.eta ? `ETA ${p.eta}` : '';
+            eta.textContent = p.eta ? `ETA ${p.eta}` : (pctVal >= 100 ? 'Finalizing…' : '');
           } else if (p.status === 'finished') {
             clearInterval(poll);
             finished = true;
@@ -801,8 +876,10 @@ if (urlInput) {
             cancelBtn.classList.add('save-btn');
             toast(`${label} ready`, 'success');
             saveHistory({ title: label, url: payload.url, time: Date.now() });
-            mountJobPlayer(card, downloadUrl, payload.type);
-            if (!isMobileDevice()) triggerFileDownload(downloadUrl);
+            mountJobPlayer(card, downloadUrl, payload.type).then((cache) => {
+              if (cache) fileCache = cache;
+            });
+            if (!isMobileDevice()) triggerFileDownload(downloadUrl, fileCache);
           } else if (p.status === 'error') {
             clearInterval(poll);
             card.classList.add('error');
@@ -831,13 +908,12 @@ if (urlInput) {
   }
 
   async function mountJobPlayer(card, downloadUrl, kind) {
-    if (!downloadUrl || (kind !== 'video' && kind !== 'audio')) return;
-    if (card.querySelector('.job-player')) return;
+    if (!downloadUrl || (kind !== 'video' && kind !== 'audio')) return null;
+    if (card.querySelector('.job-player')) return card._fileCache || null;
     try {
-      const res = await fetch(downloadUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
+      const fileData = await fetchFileBlob(downloadUrl);
+      card._fileCache = fileData;
+      const objectUrl = URL.createObjectURL(fileData.blob);
       const player = document.createElement(kind === 'audio' ? 'audio' : 'video');
       player.className = 'job-player';
       player.controls = true;
@@ -851,8 +927,10 @@ if (urlInput) {
       player.addEventListener('error', () => {
         toast('Preview player could not open this file — use Save file instead.', 'info');
       }, { once: true });
+      return fileData;
     } catch (e) {
       /* Player is optional; Save file still works */
+      return null;
     }
   }
 

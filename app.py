@@ -1,6 +1,8 @@
+import json
 import mimetypes
 import os
 import re
+import subprocess
 import time
 import uuid
 import shutil
@@ -66,6 +68,8 @@ QUEUE_LOCK = threading.Lock()
 # Reject anything above these before spending time/bandwidth on it.
 MAX_DURATION_SECONDS = int(os.environ.get("MAX_DURATION_SECONDS", 3 * 3600))  # 3 hours
 MAX_FILESIZE_MB = int(os.environ.get("MAX_FILESIZE_MB", 2000))  # 2 GB
+# Cap ffmpeg post-process so free-tier hosts do not spin forever on HEVC→H.264.
+TRANSCODE_TIMEOUT = int(os.environ.get("TRANSCODE_TIMEOUT", 600))  # 10 minutes
 
 COOKIES_DIR = os.path.join(DATA_DIR, "cookies")
 os.makedirs(COOKIES_DIR, exist_ok=True)
@@ -876,6 +880,10 @@ def make_progress_hook(job_id):
                 job["percent"] = 100
                 job["speed"] = ""
                 job["eta"] = ""
+                if job.get("kind") == "video":
+                    job["status"] = "processing"
+                    job["processing_stage"] = "Finalizing download…"
+                    job["processing_percent"] = 0
     return hook
 
 
@@ -960,6 +968,189 @@ def _vcodec_is_h264(vcodec):
 def _acodec_is_aac(acodec):
     a = (acodec or "").lower()
     return a not in ("", "none") and ("mp4a" in a or "aac" in a)
+
+
+def _update_job_processing(job_id, *, stage=None, percent=None):
+    with JOBS_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return
+        job["status"] = "processing"
+        if stage is not None:
+            job["processing_stage"] = stage
+        if percent is not None:
+            job["processing_percent"] = round(min(99.0, max(0.0, percent)), 1)
+
+
+def _run_ffmpeg(cmd, *, timeout=1800, job_id=None, stage="Processing…", duration_sec=None):
+    """Run ffmpeg; when job_id is set, stream stderr progress into the job poll API."""
+    if not job_id:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        if result.returncode != 0:
+            tail = (result.stderr or result.stdout or "ffmpeg failed")[-500:]
+            raise RuntimeError(tail)
+        return result
+
+    _update_job_processing(job_id, stage=stage, percent=0)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+    )
+    time_re = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
+    err_lines = []
+
+    def _stderr_reader():
+        try:
+            for line in proc.stderr:
+                err_lines.append(line)
+                if duration_sec and duration_sec > 0:
+                    m = time_re.search(line)
+                    if m:
+                        elapsed = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                        pct = (elapsed / duration_sec) * 100
+                        _update_job_processing(job_id, stage=stage, percent=pct)
+        except Exception:
+            pass
+
+    reader = threading.Thread(target=_stderr_reader, daemon=True)
+    reader.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+        raise RuntimeError(f"{stage} timed out after {timeout // 60} min — try 720p or phone-friendly quality.")
+    reader.join(timeout=2)
+    if proc.returncode != 0:
+        tail = "".join(err_lines)[-500:]
+        raise RuntimeError(tail or "ffmpeg failed")
+    _update_job_processing(job_id, stage=stage, percent=99)
+    return proc
+
+
+def _probe_media_file(path):
+    """Return {vcodec, acodec, has_audio, duration} from ffprobe, or None on failure."""
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe", "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", "-select_streams", "v:0,a:0",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+        data = json.loads(proc.stdout or "{}")
+        streams = data.get("streams") or []
+        video = next((s for s in streams if s.get("codec_type") == "video"), None)
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        duration = None
+        try:
+            duration = float((data.get("format") or {}).get("duration") or 0) or None
+        except (TypeError, ValueError):
+            duration = None
+        if not duration and video:
+            try:
+                duration = float(video.get("duration") or 0) or None
+            except (TypeError, ValueError):
+                duration = None
+        return {
+            "vcodec": (video or {}).get("codec_name"),
+            "acodec": (audio or {}).get("codec_name"),
+            "has_audio": audio is not None,
+            "duration": duration,
+        }
+    except Exception:
+        return None
+
+
+def _is_ios_playable(info):
+    """iPhone needs H.264 video and AAC audio (when audio exists) in MP4."""
+    if not info or not info.get("vcodec"):
+        return False
+    if not _vcodec_is_h264(info["vcodec"]):
+        return False
+    if info.get("has_audio") and not _acodec_is_aac(info["acodec"]):
+        return False
+    return True
+
+
+def _mp4_faststart(path, job_id=None):
+    """Move moov atom to file start — helps iOS Files / Photos playback."""
+    tmp = path + ".faststart.tmp.mp4"
+    try:
+        _run_ffmpeg([
+            "ffmpeg", "-y", "-i", path,
+            "-c", "copy", "-movflags", "+faststart",
+            tmp,
+        ], timeout=120, job_id=job_id, stage="Optimizing for iPhone…")
+        os.replace(tmp, path)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+
+
+def _transcode_to_ios_mp4(src_path, job_id=None):
+    """Re-encode to H.264 + AAC MP4 when remux left incompatible codecs."""
+    info = _probe_media_file(src_path)
+    duration = (info or {}).get("duration")
+    base, _ = os.path.splitext(src_path)
+    dest = base + "_ios.mp4"
+    cmd = ["ffmpeg", "-y", "-i", src_path, "-map", "0:v:0"]
+    if info and info.get("has_audio"):
+        cmd.extend(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"])
+    else:
+        cmd.append("-an")
+    cmd.extend([
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        dest,
+    ])
+    _run_ffmpeg(
+        cmd,
+        timeout=TRANSCODE_TIMEOUT,
+        job_id=job_id,
+        stage="Preparing for iPhone…",
+        duration_sec=duration,
+    )
+    os.remove(src_path)
+    return dest
+
+
+def _ensure_ios_playable_mp4(path, job_id=None):
+    """Ensure downloaded video plays in iOS Files / Photos / Chrome."""
+    if not os.path.isfile(path):
+        return path
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext not in (".mp4", ".m4v", ".mov", ".webm", ".mkv"):
+        return path
+
+    info = _probe_media_file(path)
+    if info and _is_ios_playable(info):
+        try:
+            _mp4_faststart(path, job_id=job_id)
+        except Exception as e:
+            app.logger.warning(f"faststart remux skipped: {e}")
+        if not path.lower().endswith(".mp4"):
+            mp4_path = os.path.splitext(path)[0] + ".mp4"
+            os.replace(path, mp4_path)
+            return mp4_path
+        return path
+
+    app.logger.info(
+        "Transcoding for iOS playback: v=%s a=%s has_audio=%s",
+        (info or {}).get("vcodec"), (info or {}).get("acodec"),
+        (info or {}).get("has_audio"),
+    )
+    return _transcode_to_ios_mp4(path, job_id=job_id)
 
 
 def _format_has_audio(f):
@@ -1092,7 +1283,12 @@ def _pick_info_formats(raw_formats, platform=None):
         seen_heights.add(height)
         ext = pick.get("ext") or "mp4"
         has_audio = _format_has_audio(pick)
-        compatible = _vcodec_is_h264(pick.get("vcodec")) and ext == "mp4" and has_audio
+        compatible = (
+            _vcodec_is_h264(pick.get("vcodec"))
+            and _acodec_is_aac(pick.get("acodec"))
+            and ext == "mp4"
+            and has_audio
+        )
         formats.append({
             "format_id": pick["format_id"],
             "height": height,
@@ -1164,6 +1360,22 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
             if not os.path.exists(dest):
                 os.replace(os.path.join(job_dir, filename), dest)
                 filename = safe_name
+
+        if kind == "video":
+            with JOBS_LOCK:
+                if JOBS.get(job_id):
+                    JOBS[job_id]["status"] = "processing"
+                    JOBS[job_id]["processing_stage"] = "Preparing for iPhone…"
+                    JOBS[job_id]["processing_percent"] = 0
+            filepath = _ensure_ios_playable_mp4(os.path.join(job_dir, filename), job_id=job_id)
+            filename = os.path.basename(filepath)
+            if not filename.lower().endswith(".mp4"):
+                mp4_name = os.path.splitext(filename)[0] + ".mp4"
+                mp4_path = os.path.join(job_dir, mp4_name)
+                if not os.path.exists(mp4_path):
+                    os.replace(filepath, mp4_path)
+                filename = mp4_name
+
         cleanup_path_later(job_dir)
 
         with JOBS_LOCK:
@@ -1207,7 +1419,7 @@ def api_download():
 
     job_id = str(uuid.uuid4())
     with JOBS_LOCK:
-        JOBS[job_id] = {"status": "queued", "percent": 0}
+        JOBS[job_id] = {"status": "queued", "percent": 0, "kind": kind}
     with QUEUE_LOCK:
         QUEUE_ORDER.append(job_id)
 
