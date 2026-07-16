@@ -76,6 +76,9 @@ RESEND_API_KEY = os.environ.get("RESEND_API_KEY")
 CONTACT_TO_EMAIL = os.environ.get("CONTACT_TO_EMAIL")
 YTDLP_PROXY = (os.environ.get("YTDLP_PROXY") or "").strip() or None
 YTDLP_COOKIES_FILE = (os.environ.get("YTDLP_COOKIES_FILE") or "").strip() or None
+POT_ENABLED = (os.environ.get("POT_ENABLED") or "1").strip().lower() not in ("0", "false", "no", "off")
+POT_PROVIDER_URL = (os.environ.get("POT_PROVIDER_URL") or "http://127.0.0.1:4416").strip().rstrip("/")
+POT_SERVER_HOME = (os.environ.get("POT_SERVER_HOME") or "/opt/bgutil-ytdlp-pot-provider/server").strip()
 
 
 def _load_proxy_config():
@@ -383,15 +386,43 @@ def resolve_cookiefile(token=None):
 
 
 # Ordered strategies for YouTube on cloud IPs. First success wins.
-# Prefer clients that currently need less / no PO-token attestation, then cookie-friendly ones.
+# With bgutil PO tokens, prefer mweb/web; keep non-POT clients as fallbacks.
 YOUTUBE_CLIENT_STRATEGIES = [
-    ["android_vr"],          # No PO token required for many streams
-    ["tv", "tv_simply"],     # TV clients often skip bot-gate with guest/cookies
+    ["mweb"],                # Needs PO token — supplied by bgutil when available
+    ["web"],
     ["web_safari"],          # HLS formats can succeed without full PO flow
+    ["android_vr"],          # Often no PO token required
+    ["tv", "tv_simply"],     # TV clients often skip bot-gate with guest/cookies
     ["web_embedded"],        # Works for embeddable videos without PO token
-    ["android"],             # May need cookies / may fail on account cookies
-    ["mweb", "web"],
+    ["android"],
 ]
+
+
+def pot_extractor_args():
+    """yt-dlp extractor_args for the bgutil PO Token plugin (HTTP preferred)."""
+    if not POT_ENABLED:
+        return {}
+    args = {
+        # HTTP server started by scripts/start.sh (default port 4416).
+        "youtubepot-bgutilhttp": {"base_url": [POT_PROVIDER_URL]},
+    }
+    if POT_SERVER_HOME and os.path.isdir(POT_SERVER_HOME):
+        # Script fallback if the HTTP provider is down (plugin prefers HTTP when up).
+        args["youtubepot-bgutilscript"] = {"server_home": [POT_SERVER_HOME]}
+    return args
+
+
+def pot_reachable():
+    """True when the local bgutil HTTP provider answers /ping."""
+    if not POT_ENABLED:
+        return False
+    try:
+        import urllib.request
+
+        with urllib.request.urlopen(f"{POT_PROVIDER_URL}/ping", timeout=1.5) as resp:
+            return 200 <= getattr(resp, "status", 200) < 300
+    except Exception:
+        return False
 
 
 def extract_url_candidate(text: str) -> tuple[str, list[str]]:
@@ -592,11 +623,13 @@ def normalize_media_url(url: str) -> str:
 
 def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, player_clients=None):
     """Shared yt-dlp options tuned for cloud hosts (bot / datacenter IP blocks)."""
-    clients = player_clients or ["android_vr"]
+    clients = player_clients or (["mweb"] if POT_ENABLED else ["android_vr"])
     youtube_args = {"player_client": clients}
     # Skipping webpage helps on bare datacenter IPs, but hurts authenticated cookie sessions.
     if not cookiefile:
         youtube_args["player_skip"] = ["webpage"]
+    extractor_args = {"youtube": youtube_args}
+    extractor_args.update(pot_extractor_args())
     opts = {
         "quiet": True,
         "no_warnings": True,
@@ -617,7 +650,7 @@ def base_ydl_opts(cookiefile=None, *, skip_download=False, noplaylist=True, play
             ),
             "Accept-Language": "en-US,en;q=0.9",
         },
-        "extractor_args": {"youtube": youtube_args},
+        "extractor_args": extractor_args,
     }
     if skip_download:
         opts["skip_download"] = True
@@ -1088,6 +1121,9 @@ def health():
         "proxy_configured": PROXY_STATUS["configured"],
         "proxy_valid": PROXY_STATUS["valid"],
         "proxy_reason": PROXY_STATUS["reason"],
+        "pot": POT_ENABLED,
+        "pot_url": POT_PROVIDER_URL if POT_ENABLED else None,
+        "pot_reachable": pot_reachable(),
     })
 
 
