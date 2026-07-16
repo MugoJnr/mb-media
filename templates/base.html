@@ -2,7 +2,8 @@
 <html lang="en" data-theme="dark">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0d">
 <title>{% block title %}MB MEDIA — Download Smarter. Faster. Better.{% endblock %}</title>
 <meta name="description" content="{% block description %}MB MEDIA lets you preview and download video or audio from YouTube, TikTok, Instagram, X, Facebook and more — fast, clean, and free.{% endblock %}">
 
@@ -65,16 +66,16 @@
   </div>
 </nav>
 
-<div id="cookiesModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.6); z-index:200; align-items:center; justify-content:center; padding:20px;">
-  <div style="background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px; max-width:400px; width:100%;">
-    <h3 style="margin-bottom:8px;">Upload cookies.txt</h3>
-    <p style="color:var(--muted); font-size:0.85rem; margin-bottom:16px;">YouTube/Instagram/TikTok sometimes block cloud servers. Export a Netscape cookies.txt from your browser, upload it here, and we will use it for your session only (auto-deletes after 6 hours).</p>
-    <input type="file" id="cookiesFileInput" accept=".txt" style="margin-bottom:14px; width:100%; color:var(--text);">
-    <div style="display:flex; gap:8px;">
-      <button class="btn btn-gold" id="cookiesUploadConfirm" style="flex:1;">Upload</button>
-      <button class="btn btn-ghost" id="cookiesModalClose" style="flex:1;">Cancel</button>
+<div id="cookiesModal" class="modal-overlay" style="display:none;">
+  <div class="modal-panel" role="dialog" aria-labelledby="cookiesModalTitle" aria-modal="true">
+    <h3 id="cookiesModalTitle">Upload cookies.txt</h3>
+    <p class="modal-copy">YouTube/Instagram/TikTok sometimes block cloud servers. Export a Netscape cookies.txt from your browser, upload it here, and we will use it for your session only (auto-deletes after 6 hours).</p>
+    <input type="file" id="cookiesFileInput" accept=".txt" class="modal-file">
+    <div class="modal-actions">
+      <button class="btn btn-gold" id="cookiesUploadConfirm">Upload</button>
+      <button class="btn btn-ghost" id="cookiesModalClose">Cancel</button>
     </div>
-    <div id="cookiesStatus" style="font-size:0.8rem; color:var(--muted); margin-top:10px;"></div>
+    <div id="cookiesStatus" class="modal-status"></div>
   </div>
 </div>
 

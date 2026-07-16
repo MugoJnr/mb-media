@@ -29,10 +29,14 @@ function renderHistory() {
     const row = document.createElement('div');
     row.className = 'card';
     row.style.padding = '14px 18px';
+    const safeTitle = (item.title || 'Untitled')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
     row.innerHTML = `
       <div style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
-        <div style="overflow:hidden;">
-          <div style="font-size:0.9rem; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${item.title}</div>
+        <div style="overflow:hidden; min-width:0;">
+          <div style="font-size:0.9rem; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${safeTitle}</div>
           <div style="font-size:0.75rem; color:var(--muted); margin-top:2px;">${date}</div>
         </div>
       </div>

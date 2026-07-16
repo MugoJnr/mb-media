@@ -922,10 +922,7 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
         opts["progress_hooks"] = [make_progress_hook(job_id)]
 
         if kind == "video":
-            opts["format"] = (
-                format_id
-                or "bestvideo*+bestaudio/best[ext=mp4]/best"
-            )
+            opts["format"] = format_id or "bestvideo*+bestaudio/best[ext=mp4]/best"
             opts["merge_output_format"] = "mp4"
             opts["format_sort"] = ["res:1080", "ext:mp4:m4a"]
         elif kind == "audio":
@@ -989,7 +986,7 @@ def api_download():
     data = request.get_json(force=True, silent=True) or {}
     url = (data.get("url") or "").strip()
     kind = data.get("type", "video")
-    format_id = data.get("format_id")
+    format_id = (data.get("format_id") or "").strip() or None
     audio_quality = data.get("audio_quality")
     audio_format = data.get("audio_format")
     cookie_token = data.get("cookie_token")

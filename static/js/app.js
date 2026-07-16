@@ -65,6 +65,19 @@ function toast(message, type = 'info') {
   setTimeout(() => el.remove(), 4500);
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function isMobileDevice() {
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+}
+
 // ---------- Cookies modal ----------
 const cookiesBtn = document.getElementById('cookiesBtn');
 const cookiesModal = document.getElementById('cookiesModal');
@@ -76,6 +89,9 @@ const cookiesStatus = document.getElementById('cookiesStatus');
 if (cookiesBtn) {
   cookiesBtn.addEventListener('click', () => { cookiesModal.style.display = 'flex'; });
   cookiesModalClose.addEventListener('click', () => { cookiesModal.style.display = 'none'; });
+  cookiesModal.addEventListener('click', (e) => {
+    if (e.target === cookiesModal) cookiesModal.style.display = 'none';
+  });
   cookiesUploadConfirm.addEventListener('click', async () => {
     const file = cookiesFileInput.files[0];
     if (!file) { cookiesStatus.textContent = 'Choose a file first.'; return; }
@@ -140,8 +156,23 @@ if (urlInput) {
   const playlistPanel = document.getElementById('playlistPanel');
   const playlistEntries = document.getElementById('playlistEntries');
   const downloadBatchBtn = document.getElementById('downloadBatchBtn');
-  const emptyStateHTML = '<p style="text-align:center; color:var(--muted); font-size:0.85rem; padding:20px 0;">Your downloads will appear here.</p>';
+  const emptyStateHTML = '<p class="download-empty">Your downloads will appear here.</p>';
   downloadManager.innerHTML = emptyStateHTML;
+
+  function isManagerEmpty() {
+    return !downloadManager.querySelector('.job-card');
+  }
+
+  function restoreEmptyState() {
+    if (isManagerEmpty()) downloadManager.innerHTML = emptyStateHTML;
+  }
+
+  function setDownloadControlsDisabled(disabled) {
+    ['downloadVideoBtn', 'downloadAudioBtn', 'downloadExtraBtn', 'downloadBatchBtn'].forEach((id) => {
+      const btn = document.getElementById(id);
+      if (btn) btn.disabled = disabled;
+    });
+  }
 
   const URL_PATTERN = /(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|twitter\.com|x\.com|facebook\.com|fb\.watch|fb\.gg|vimeo\.com|dailymotion\.com|dai\.ly|vm\.tiktok\.com|vt\.tiktok\.com)/i;
   const TRACKING_PARAMS = new Set([
@@ -394,7 +425,9 @@ if (urlInput) {
     }
 
     currentUrl = local.url;
+    const prevLabel = fetchBtn.textContent;
     fetchBtn.disabled = true;
+    fetchBtn.textContent = 'Loading…';
     previewCard.style.display = 'none';
     previewSkeleton.style.display = 'block';
     setStatus('Fetching preview…');
@@ -429,6 +462,7 @@ if (urlInput) {
     } finally {
       clearTimeout(timeoutId);
       fetchBtn.disabled = false;
+      fetchBtn.textContent = prevLabel;
       previewSkeleton.style.display = 'none';
     }
   }
@@ -473,12 +507,14 @@ if (urlInput) {
     if (data.is_playlist && data.playlist_entries && data.playlist_entries.length > 0) {
       playlistPanel.style.display = 'block';
       playlistEntries.innerHTML = '';
-      data.playlist_entries.forEach((entry, i) => {
+      data.playlist_entries.forEach((entry) => {
         const row = document.createElement('label');
-        row.style.cssText = 'display:flex; align-items:center; gap:10px; font-size:0.85rem; cursor:pointer;';
+        row.className = 'playlist-row';
+        const safeTitle = escapeHtml(entry.title || 'Untitled');
+        const safeUrl = encodeURIComponent(entry.url || '');
         row.innerHTML = `
-          <input type="checkbox" data-url="${encodeURIComponent(entry.url)}" data-title="${encodeURIComponent(entry.title || 'Untitled')}">
-          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${entry.title || 'Untitled'}</span>
+          <input type="checkbox" data-url="${safeUrl}" data-title="${encodeURIComponent(entry.title || 'Untitled')}">
+          <span class="playlist-title">${safeTitle}</span>
         `;
         playlistEntries.appendChild(row);
       });
@@ -530,14 +566,29 @@ if (urlInput) {
   });
 
   // ---------- Download manager ----------
+  function triggerFileDownload(downloadUrl) {
+    if (isMobileDevice()) {
+      // iOS/Android browsers often ignore programmatic <a download>.
+      window.location.assign(downloadUrl);
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = '';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
   function createJobCard(label) {
-    if (downloadManager.innerHTML === emptyStateHTML) downloadManager.innerHTML = '';
+    if (isManagerEmpty()) downloadManager.innerHTML = '';
     const card = document.createElement('div');
     card.className = 'job-card';
     card.innerHTML = `
       <div class="job-top">
-        <span class="job-title">${label}</span>
-        <div class="job-actions"><button class="cancel-btn">Cancel</button></div>
+        <span class="job-title">${escapeHtml(label)}</span>
+        <div class="job-actions"><button type="button" class="cancel-btn">Cancel</button></div>
       </div>
       <div class="progress-track"><div class="progress-fill"></div></div>
       <div class="job-stats"><span class="pct">0%</span><span class="speed"></span><span class="eta"></span></div>
@@ -570,7 +621,15 @@ if (urlInput) {
     const cancelBtn = card.querySelector('.cancel-btn');
 
     let cancelled = false;
-    cancelBtn.addEventListener('click', () => { cancelled = true; card.remove(); });
+    let poll = null;
+    cancelBtn.addEventListener('click', () => {
+      cancelled = true;
+      if (poll) clearInterval(poll);
+      card.remove();
+      restoreEmptyState();
+    });
+
+    setDownloadControlsDisabled(true);
 
     try {
       const res = await fetch('/api/download', {
@@ -582,15 +641,24 @@ if (urlInput) {
       if (!res.ok) {
         card.classList.add('error');
         pct.textContent = data.error || 'Failed';
+        speed.textContent = '';
+        eta.textContent = '';
+        toast(data.error || 'Download failed to start', 'error');
         return;
       }
 
       const jobId = data.job_id;
-      const poll = setInterval(async () => {
+      poll = setInterval(async () => {
         if (cancelled) { clearInterval(poll); return; }
         try {
           const pres = await fetch(`/api/progress/${jobId}`);
           const p = await pres.json();
+          if (!pres.ok) {
+            clearInterval(poll);
+            card.classList.add('error');
+            pct.textContent = p.error || 'Job not found';
+            return;
+          }
           if (p.status === 'queued') {
             card.classList.add('queued');
             pct.textContent = p.queue_position ? `Queued (#${p.queue_position})` : 'Queued…';
@@ -599,6 +667,8 @@ if (urlInput) {
           } else if (p.status === 'checking') {
             card.classList.remove('queued');
             pct.textContent = 'Checking file…';
+            speed.textContent = '';
+            eta.textContent = '';
           } else if (p.status === 'downloading') {
             card.classList.remove('queued');
             const pctVal = p.percent || 0;
@@ -612,39 +682,41 @@ if (urlInput) {
             fill.style.width = '100%';
             pct.textContent = '100%';
             speed.textContent = '';
-            eta.textContent = '';
+            eta.textContent = isMobileDevice() ? 'Tap Save file' : 'Ready';
             card.classList.add('success');
             cancelBtn.textContent = 'Save file';
-            const triggerDownload = () => {
-              const a = document.createElement('a');
-              a.href = p.download_url;
-              a.download = '';
-              a.rel = 'noopener';
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
+            cancelBtn.classList.add('save-btn');
+            cancelBtn.onclick = (ev) => {
+              ev.preventDefault();
+              triggerFileDownload(p.download_url);
             };
-            cancelBtn.onclick = (ev) => { ev.preventDefault(); triggerDownload(); };
             toast(`${label} ready`, 'success');
             saveHistory({ title: label, url: payload.url, time: Date.now() });
-            // Download without navigating away (navigating caused 404 pages for titled files).
-            triggerDownload();
+            if (!isMobileDevice()) triggerFileDownload(p.download_url);
           } else if (p.status === 'error') {
             clearInterval(poll);
             card.classList.add('error');
             pct.textContent = 'Failed';
-            speed.textContent = p.error || '';
+            speed.textContent = p.error || 'Download failed';
+            eta.textContent = '';
             toast(`${label} failed`, 'error');
           }
         } catch (e) {
           clearInterval(poll);
           card.classList.add('error');
           pct.textContent = 'Connection lost';
+          speed.textContent = '';
+          eta.textContent = '';
         }
-      }, 1200);
+      }, 1000);
     } catch (e) {
       card.classList.add('error');
       pct.textContent = 'Network error';
+      speed.textContent = '';
+      eta.textContent = '';
+      toast('Network error while starting download', 'error');
+    } finally {
+      setDownloadControlsDisabled(false);
     }
   }
 
@@ -660,11 +732,13 @@ if (urlInput) {
   }
 
   if (downloadVideoBtn) downloadVideoBtn.addEventListener('click', () => {
+    if (!currentUrl || !currentInfo) { toast('Fetch a preview first', 'error'); return; }
     if (!confirmIfDuplicate(currentUrl)) return;
+    const formatId = videoQuality.value || null;
     startDownload({
       url: currentUrl,
       type: 'video',
-      format_id: videoQuality.value
+      format_id: formatId,
     }, currentInfo?.title || 'Video download');
   });
 
@@ -681,6 +755,7 @@ if (urlInput) {
   });
 
   if (downloadAudioBtn) downloadAudioBtn.addEventListener('click', () => {
+    if (!currentUrl || !currentInfo) { toast('Fetch a preview first', 'error'); return; }
     if (!confirmIfDuplicate(currentUrl)) return;
     startDownload({
       url: currentUrl,
@@ -691,6 +766,7 @@ if (urlInput) {
   });
 
   if (downloadExtraBtn) downloadExtraBtn.addEventListener('click', () => {
+    if (!currentUrl || !currentInfo) { toast('Fetch a preview first', 'error'); return; }
     if (selectedExtras.size === 0) { toast('Select at least one extra', 'error'); return; }
     selectedExtras.forEach(extra => {
       startDownload({ url: currentUrl, type: extra }, `${currentInfo?.title || 'File'} — ${extra}`);
