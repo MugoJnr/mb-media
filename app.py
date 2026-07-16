@@ -1701,13 +1701,6 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
             else:
                 filepath, phone_compatible, convert_warning = _prepare_video_fast_path(filepath)
                 filename = os.path.basename(filepath)
-            if not filename.lower().endswith(".mp4") and kind == "video":
-                mp4_name = os.path.splitext(filename)[0] + ".mp4"
-                mp4_path = os.path.join(job_dir, mp4_name)
-                src = os.path.join(job_dir, filename)
-                if os.path.isfile(src) and not os.path.exists(mp4_path):
-                    os.replace(src, mp4_path)
-                filename = mp4_name
 
         _finish_job(
             job_id, job_dir, filename, kind, platform,
@@ -1830,17 +1823,27 @@ def serve_file(job_id, filename=None):
     if not filepath:
         abort(404)
     # ASCII fallback name avoids Content-Disposition issues on some mobile browsers.
-    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download_name).strip("._") or "download.bin"
+    ascii_name = re.sub(r"[^A-Za-z0-9._-]+", "_", download_name).strip("._") or "download.mp4"
     safe_name = download_name if download_name.isascii() else ascii_name
+    ext = os.path.splitext(safe_name)[1].lower()
     mime, _ = mimetypes.guess_type(safe_name)
-    if not mime and safe_name.lower().endswith(".mp4"):
+    if ext == ".mp4":
         mime = "video/mp4"
-    return send_file(
+    elif ext == ".webm":
+        mime = "video/webm"
+    elif ext in (".m4a", ".m4v"):
+        mime = "audio/mp4" if ext == ".m4a" else "video/mp4"
+    response = send_file(
         filepath,
         as_attachment=True,
         download_name=safe_name,
         mimetype=mime or "application/octet-stream",
+        conditional=True,
     )
+    # Explicit type helps iOS Web Share accept the fetched blob as a video file.
+    if mime:
+        response.headers["Content-Type"] = mime
+    return response
 
 
 # ---------- Admin analytics ----------

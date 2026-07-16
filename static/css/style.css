@@ -689,6 +689,12 @@ audio.job-player {
   max-height: none;
   height: 40px;
 }
+.job-player-hint {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
 .progress-track {
   height: 6px;
   background: var(--surface-2);

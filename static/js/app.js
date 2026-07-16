@@ -114,7 +114,7 @@ function mimeFromFilename(name) {
   return map[ext] || 'application/octet-stream';
 }
 
-function parseDownloadFilename(contentDisposition, fallback = 'download.bin') {
+function parseDownloadFilename(contentDisposition, fallback = 'download.mp4') {
   const header = contentDisposition || '';
   const star = header.match(/filename\*=(?:UTF-8''|utf-8'')([^;\n]+)/i);
   if (star) {
@@ -125,6 +125,70 @@ function parseDownloadFilename(contentDisposition, fallback = 'download.bin') {
   const plain = header.match(/filename="?([^";\n]+)"?/i);
   if (plain) return plain[1].trim() || fallback;
   return fallback;
+}
+
+function sanitizeShareFilename(name, mime) {
+  const raw = String(name || 'download.mp4').split(/[/\\]/).pop() || 'download.mp4';
+  const extFromMime = {
+    'video/mp4': '.mp4',
+    'video/webm': '.webm',
+    'audio/mp4': '.m4a',
+    'audio/mpeg': '.mp3',
+  };
+  let base = raw.replace(/[^A-Za-z0-9._-]+/g, '_').replace(/_+/g, '_').replace(/^\.+|\.+$/g, '');
+  if (!base) base = 'download';
+  const ext = extFromMime[mime] || (base.includes('.') ? '' : '.mp4');
+  if (ext && !base.toLowerCase().endsWith(ext)) {
+    base = base.replace(/\.[^.]+$/, '') + ext;
+  }
+  return base.slice(0, 120);
+}
+
+function buildShareFile({ blob, fileName, mime }) {
+  const type = mime || blob.type || mimeFromFilename(fileName);
+  const safeName = sanitizeShareFilename(fileName, type);
+  const typedBlob = (blob.type && blob.type !== 'application/octet-stream')
+    ? blob
+    : new Blob([blob], { type });
+  return new File([typedBlob], safeName, { type });
+}
+
+function scrollJobPlayerIntoView(card) {
+  const player = card && card.querySelector('.job-player');
+  if (player) {
+    player.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return true;
+  }
+  return false;
+}
+
+function showIOSPlayerFallback(card, message) {
+  scrollJobPlayerIntoView(card);
+  toast(
+    message || 'Use the player below: tap ⋯ then Save Video, or tap Save file again for the share sheet.',
+    'info',
+  );
+}
+
+function mobileShareFromCache(fileData) {
+  const file = buildShareFile(fileData);
+  if (typeof navigator.share !== 'function') {
+    return { ok: false, reason: 'unsupported' };
+  }
+  if (navigator.canShare && !navigator.canShare({ files: [file] })) {
+    return { ok: false, reason: 'unsupported' };
+  }
+  try {
+    // Call share synchronously from the tap handler — iOS drops the gesture after await.
+    navigator.share({ files: [file], title: file.name });
+    return { ok: true };
+  } catch (e) {
+    if (e && e.name === 'AbortError') return { ok: true, cancelled: true };
+    if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) {
+      return { ok: false, reason: 'gesture' };
+    }
+    return { ok: false, reason: 'error', error: e };
+  }
 }
 
 function clickBlobDownload(blob, fileName) {
@@ -707,41 +771,67 @@ if (urlInput) {
   });
 
   // ---------- Download manager ----------
-  async function triggerFileDownload(downloadUrl, fileCache, onProgress) {
+  async function triggerFileDownload(downloadUrl, fileCache, onProgress, card = null) {
     if (isMobileDevice()) {
-      let fileData;
-      try {
-        fileData = await fetchFileBlob(downloadUrl, { cached: fileCache, onProgress });
-      } catch (e) {
-        toast(e.message || 'Could not fetch the file — try Save file again in a moment.', 'error');
-        return false;
+      const cached = fileCache && fileCache.blob ? fileCache : null;
+
+      // iOS needs share() in the same user-gesture turn — use prefetch cache when ready.
+      if (isIOS() && cached) {
+        const shareResult = mobileShareFromCache(cached);
+        if (shareResult.ok) return { ok: true, cache: cached };
+        if (shareResult.reason === 'gesture') {
+          toast('Tap Save file again to open the share sheet.', 'info');
+          return { ok: false, cache: cached, needsRetap: true };
+        }
+        if (shareResult.reason === 'unsupported') {
+          showIOSPlayerFallback(card, 'Sharing is not available for this file — use the player below (⋯ → Save Video).');
+          return { ok: false, cache: cached, needsPlayer: true };
+        }
+        showIOSPlayerFallback(card);
+        return { ok: false, cache: cached, needsPlayer: true };
+      }
+
+      let fileData = cached;
+      if (!fileData) {
+        try {
+          fileData = await fetchFileBlob(downloadUrl, { cached: fileCache, onProgress });
+        } catch (e) {
+          if (e && e.name === 'AbortError') {
+            toast('Save timed out — try again on Wi‑Fi.', 'error');
+          } else {
+            toast(e.message || 'Could not fetch the file — wait a moment and tap Save file again.', 'error');
+          }
+          return { ok: false };
+        }
+      }
+
+      if (isIOS()) {
+        if (card) card._fileCache = fileData;
+        toast('File ready — tap Save file again to open the share sheet.', 'info');
+        if (card) {
+          const eta = card.querySelector('.eta');
+          if (eta) eta.textContent = 'Tap Save file again';
+        }
+        return { ok: false, cache: fileData, needsRetap: true };
       }
 
       const { blob, fileName, mime } = fileData;
-      const file = new File([blob], fileName, { type: mime });
+      const file = buildShareFile({ blob, fileName, mime });
 
-      // iOS / mobile: Web Share keeps the SPA in place (Save to Files, AirDrop, etc.).
       if (typeof navigator.share === 'function') {
         const canShareFiles = !navigator.canShare || navigator.canShare({ files: [file] });
         if (canShareFiles) {
           try {
-            await navigator.share({ files: [file], title: fileName });
-            return true;
+            await navigator.share({ files: [file], title: file.name });
+            return { ok: true, cache: fileData };
           } catch (e) {
-            if (e && e.name === 'AbortError') return true;
+            if (e && e.name === 'AbortError') return { ok: true, cancelled: true, cache: fileData };
           }
         }
       }
 
-      // Android and other mobile browsers: in-page blob download (no navigation).
-      if (!isIOS()) {
-        clickBlobDownload(blob.type === mime ? blob : new Blob([blob], { type: mime }), fileName);
-        return true;
-      }
-
-      // iOS Chrome/Safari often open blob/video links in a new tab — stay on this page.
-      toast('Use the player below: tap ⋯ then Save Video, or tap Save file again for the share sheet.', 'info');
-      return false;
+      clickBlobDownload(blob.type === mime ? blob : new Blob([blob], { type: mime }), fileName);
+      return { ok: true, cache: fileData };
     }
 
     const a = document.createElement('a');
@@ -752,7 +842,7 @@ if (urlInput) {
     document.body.appendChild(a);
     a.click();
     a.remove();
-    return true;
+    return { ok: true };
   }
 
   function createJobCard(label) {
@@ -846,14 +936,26 @@ if (urlInput) {
           eta.textContent = p >= 100 ? '' : 'Keep this tab open';
         };
         try {
-          await triggerFileDownload(downloadUrl, fileCache || card._fileCache, updateSaveProgress);
+          const result = await triggerFileDownload(
+            downloadUrl,
+            fileCache || card._fileCache,
+            updateSaveProgress,
+            card,
+          );
+          if (result && result.cache) {
+            fileCache = result.cache;
+            card._fileCache = result.cache;
+          }
         } finally {
           cancelBtn.disabled = false;
           cancelBtn.textContent = 'Save file';
           if (finished) {
             fill.style.width = '100%';
             pct.textContent = '100%';
-            eta.textContent = isMobileDevice() ? 'Tap Save file' : 'Ready — play below';
+            const readyHint = isMobileDevice()
+              ? (card._fileCache ? 'Tap Save file' : 'Preparing save…')
+              : 'Ready — play below';
+            eta.textContent = readyHint;
           }
         }
         return;
@@ -1030,11 +1132,20 @@ if (urlInput) {
             }
             saveHistory({ title: label, url: payload.url, time: Date.now() });
             card._fileCache = null;
-            setTimeout(() => {
-              mountJobPlayer(card, downloadUrl, payload.type).then((cache) => {
-                if (cache) fileCache = cache;
-              });
-            }, 250);
+            if (isMobileDevice()) {
+              eta.textContent = 'Preparing save…';
+            }
+            mountJobPlayer(card, downloadUrl, payload.type).then((cache) => {
+              if (cache) {
+                fileCache = cache;
+                card._fileCache = cache;
+                if (isMobileDevice()) {
+                  eta.textContent = 'Tap Save file';
+                }
+              } else if (isMobileDevice()) {
+                eta.textContent = 'Tap Save file';
+              }
+            });
             if (!isMobileDevice()) triggerFileDownload(downloadUrl, fileCache);
           } else if (p.status === 'error') {
             clearInterval(poll);
@@ -1088,8 +1199,14 @@ if (urlInput) {
         player.setAttribute('controlsList', 'nodownload');
       }
       card.appendChild(player);
+      if (isMobileDevice() && kind === 'video') {
+        const hint = document.createElement('p');
+        hint.className = 'job-player-hint';
+        hint.textContent = 'To save without the share sheet: play the video, tap ⋯, then Save Video.';
+        card.appendChild(hint);
+      }
       player.addEventListener('error', () => {
-        toast('Preview player could not open this file — use Save file instead.', 'info');
+        showIOSPlayerFallback(card, 'Preview player could not open this file — tap Save file or Make phone-friendly.');
       }, { once: true });
       return fileData;
     } catch (e) {
