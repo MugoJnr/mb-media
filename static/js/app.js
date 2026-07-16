@@ -486,6 +486,20 @@ if (urlInput) {
     return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(1) + ' MB';
   }
 
+  /** Prefer highest-resolution H.264+AAC MP4; else fall back to best available (may convert). */
+  function pickDefaultVideoFormat(formats) {
+    if (!formats || formats.length === 0) return null;
+    const phoneFriendly = formats.filter((f) => f.compatible);
+    if (phoneFriendly.length === 0) return formats[0].format_id;
+    return phoneFriendly.reduce((best, f) => (f.height >= best.height ? f : best)).format_id;
+  }
+
+  function formatOptionTag(f) {
+    if (f.compatible) return ' · phone-friendly';
+    if (f.has_audio === false) return ' · video only — may remux';
+    return ' · will convert for phones';
+  }
+
   // ---------- Clipboard ----------
   if (pasteBtn) {
     pasteBtn.addEventListener('click', async () => {
@@ -599,8 +613,10 @@ if (urlInput) {
       const opt = document.createElement('option');
       opt.value = f.format_id;
       opt.dataset.size = f.filesize_approx || '';
+      opt.dataset.compatible = f.compatible ? '1' : '0';
+      opt.dataset.hasAudio = f.has_audio === false ? '0' : '1';
       const size = formatBytes(f.filesize_approx);
-      const tag = f.compatible ? ' · phone-friendly' : (f.has_audio === false ? ' · may need remux' : '');
+      const tag = formatOptionTag(f);
       opt.textContent = `${f.height}p ${f.ext}${tag}${size ? ' · ' + size : ''}`;
       videoQuality.appendChild(opt);
     });
@@ -609,6 +625,9 @@ if (urlInput) {
       opt.value = '';
       opt.textContent = 'Best compatible (MP4)';
       videoQuality.appendChild(opt);
+    } else {
+      const defaultId = pickDefaultVideoFormat(data.formats);
+      if (defaultId != null) videoQuality.value = defaultId;
     }
     updateSizeHint();
 
@@ -638,8 +657,15 @@ if (urlInput) {
   function updateSizeHint() {
     const opt = videoQuality.selectedOptions[0];
     if (!opt) { videoSizeHint.textContent = ''; return; }
+    const parts = [];
     const size = formatBytes(Number(opt.dataset.size));
-    videoSizeHint.textContent = size ? `Estimated size: ${size}` : '';
+    if (size) parts.push(`Estimated size: ${size}`);
+    if (opt.dataset.compatible === '0' && opt.dataset.hasAudio !== '0') {
+      parts.push('Converts automatically for phones');
+    } else if (opt.dataset.hasAudio === '0') {
+      parts.push('May remux to add audio');
+    }
+    videoSizeHint.textContent = parts.join(' · ');
   }
   videoQuality.addEventListener('change', updateSizeHint);
 
@@ -894,7 +920,7 @@ if (urlInput) {
               pct.textContent = stage;
             }
             speed.textContent = '';
-            eta.textContent = 'May take a few minutes';
+            eta.textContent = 'Converting for phones…';
           } else if (p.status === 'downloading') {
             card.classList.remove('queued');
             const pctVal = p.percent || 0;
