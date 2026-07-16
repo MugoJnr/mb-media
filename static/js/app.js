@@ -498,13 +498,14 @@ if (urlInput) {
       opt.value = f.format_id;
       opt.dataset.size = f.filesize_approx || '';
       const size = formatBytes(f.filesize_approx);
-      opt.textContent = `${f.height}p ${f.ext}${size ? ' · ' + size : ''}`;
+      const tag = f.compatible ? ' · phone-friendly' : '';
+      opt.textContent = `${f.height}p ${f.ext}${tag}${size ? ' · ' + size : ''}`;
       videoQuality.appendChild(opt);
     });
     if (!data.formats || data.formats.length === 0) {
       const opt = document.createElement('option');
       opt.value = '';
-      opt.textContent = 'Best available';
+      opt.textContent = 'Best compatible (MP4)';
       videoQuality.appendChild(opt);
     }
     updateSizeHint();

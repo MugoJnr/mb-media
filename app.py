@@ -828,23 +828,7 @@ def api_info():
         if entries:
             info = entries[0]
 
-    formats = []
-    seen = set()
-    for f in info.get("formats", []) or []:
-        if f.get("vcodec") in (None, "none"):
-            continue
-        height = f.get("height")
-        ext = f.get("ext")
-        if not height or (height, ext) in seen:
-            continue
-        seen.add((height, ext))
-        formats.append({
-            "format_id": f["format_id"],
-            "height": height,
-            "ext": ext,
-            "filesize_approx": f.get("filesize") or f.get("filesize_approx"),
-        })
-    formats.sort(key=lambda x: x["height"], reverse=True)
+    formats = _pick_info_formats(info.get("formats", []) or [])
 
     subtitles_available = bool(info.get("subtitles") or info.get("automatic_captions"))
 
@@ -861,7 +845,7 @@ def api_info():
         "entry_count": entry_count,
         "playlist_entries": playlist_entries,
         "subtitles_available": subtitles_available,
-        "formats": formats[:8],
+        "formats": formats,
         "normalized_url": url,
         "url_fixes": url_fixes,
     })
@@ -962,6 +946,80 @@ def run_download_job(job_id, url, kind, format_id=None, audio_quality=None, audi
         DOWNLOAD_SEMAPHORE.release()
 
 
+def _vcodec_is_h264(vcodec):
+    v = (vcodec or "").lower()
+    return v not in ("", "none") and ("avc" in v or "h264" in v)
+
+
+def _acodec_is_aac(acodec):
+    a = (acodec or "").lower()
+    return a not in ("", "none") and ("mp4a" in a or "aac" in a)
+
+
+def _mobile_video_format_string(format_id=None):
+    """Prefer H.264 + AAC in MP4 so phones and desktop players can open the file."""
+    compatible = (
+        "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
+        "bestvideo[vcodec*=avc1][height<=1080]+bestaudio[acodec*=mp4a]/"
+        "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
+        "best[ext=mp4][height<=1080]/best[height<=1080]/best"
+    )
+    if format_id:
+        # User pick may be video-only; always attach compatible audio when possible.
+        return (
+            f"{format_id}+bestaudio[acodec^=mp4a]/"
+            f"{format_id}+bestaudio[ext=m4a]/"
+            f"{format_id}+bestaudio/"
+            f"{format_id}/"
+            f"{compatible}"
+        )
+    return compatible
+
+
+def _pick_info_formats(raw_formats):
+    """Build a short quality list biased toward mobile-playable H.264/MP4."""
+    candidates = []
+    for f in raw_formats or []:
+        if f.get("vcodec") in (None, "none"):
+            continue
+        height = f.get("height")
+        if not height:
+            continue
+        candidates.append(f)
+
+    def score(f):
+        vcodec = f.get("vcodec") or ""
+        ext = (f.get("ext") or "").lower()
+        h264 = 2 if _vcodec_is_h264(vcodec) else 0
+        mp4 = 1 if ext == "mp4" else 0
+        return (height or 0, h264, mp4)
+
+    candidates.sort(key=score, reverse=True)
+
+    formats = []
+    seen_heights = set()
+    for f in candidates:
+        height = f["height"]
+        if height in seen_heights:
+            continue
+        # Prefer H.264 when available for this height; otherwise take best remaining.
+        same_h = [x for x in candidates if x.get("height") == height]
+        pick = next((x for x in same_h if _vcodec_is_h264(x.get("vcodec"))), same_h[0])
+        seen_heights.add(height)
+        ext = pick.get("ext") or "mp4"
+        compatible = _vcodec_is_h264(pick.get("vcodec")) and ext == "mp4"
+        formats.append({
+            "format_id": pick["format_id"],
+            "height": height,
+            "ext": ext,
+            "compatible": compatible,
+            "filesize_approx": pick.get("filesize") or pick.get("filesize_approx"),
+        })
+        if len(formats) >= 8:
+            break
+    return formats
+
+
 def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform):
     job_dir = os.path.join(DOWNLOAD_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
@@ -973,9 +1031,13 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
         opts["progress_hooks"] = [make_progress_hook(job_id)]
 
         if kind == "video":
-            opts["format"] = format_id or "bestvideo*+bestaudio/best[ext=mp4]/best"
+            opts["format"] = _mobile_video_format_string(format_id)
             opts["merge_output_format"] = "mp4"
-            opts["format_sort"] = ["res:1080", "ext:mp4:m4a"]
+            opts["format_sort"] = ["vcodec:h264", "acodec:mp4a", "ext:mp4:m4a", "res:1080", "size"]
+            opts["postprocessors"] = [{
+                "key": "FFmpegVideoRemuxer",
+                "preferedformat": "mp4",
+            }]
         elif kind == "audio":
             opts["format"] = "bestaudio/best"
             opts["postprocessors"] = [{
