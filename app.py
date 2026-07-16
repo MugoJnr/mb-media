@@ -404,11 +404,13 @@ def pot_extractor_args():
         return {}
     args = {
         # HTTP server started by scripts/start.sh (default port 4416).
-        "youtubepot-bgutilhttp": {"base_url": [POT_PROVIDER_URL]},
+        # yt-dlp expects `base_url` as a string, not a list.
+        "youtubepot-bgutilhttp": {"base_url": POT_PROVIDER_URL},
     }
     if POT_SERVER_HOME and os.path.isdir(POT_SERVER_HOME):
         # Script fallback if the HTTP provider is down (plugin prefers HTTP when up).
-        args["youtubepot-bgutilscript"] = {"server_home": [POT_SERVER_HOME]}
+        # yt-dlp expects `server_home` as a string, not a list.
+        args["youtubepot-bgutilscript"] = {"server_home": POT_SERVER_HOME}
     return args
 
 
