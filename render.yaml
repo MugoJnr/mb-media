@@ -9,6 +9,10 @@ services:
     envVars:
       - key: MAX_CONCURRENT_DOWNLOADS
         value: "1"
+      - key: GUNICORN_THREADS
+        value: "4"
+      - key: TRANSCODE_MAX_HEIGHT
+        value: "720"
       - key: SECRET_KEY
         generateValue: true
       - key: ADMIN_PASSWORD

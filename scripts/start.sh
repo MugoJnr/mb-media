@@ -38,8 +38,14 @@ start_pot_server() {
 
 start_pot_server
 
+# One worker + gthread keeps RAM low on Render free/starter while still serving
+# /api/progress during long ffmpeg transcodes or /api/file transfers.
+GUNICORN_THREADS="${GUNICORN_THREADS:-4}"
+
 exec gunicorn app:app \
   --bind "0.0.0.0:${PORT:-5000}" \
   --timeout 660 \
   --workers 1 \
+  --worker-class gthread \
+  --threads "${GUNICORN_THREADS}" \
   --keep-alive 5

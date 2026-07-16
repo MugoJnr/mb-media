@@ -847,10 +847,31 @@ if (urlInput) {
       const jobId = data.job_id;
       const POLL_INTERVAL_MS = 1000;
       const POLL_FETCH_TIMEOUT_MS = 12000;
-      const MAX_POLL_FAILURES = 25;
+      const POLL_FETCH_TIMEOUT_PROCESSING_MS = 30000;
+      const RECONNECT_THRESHOLD = 3;
+      const MAX_POLL_FAILURES = 45;
       let pollFailures = 0;
+      let lastKnownStatus = null;
+      let lastProcessingStage = 'Converting for phones…';
+
+      const pollTimeoutMs = () => (
+        lastKnownStatus === 'processing' ? POLL_FETCH_TIMEOUT_PROCESSING_MS : POLL_FETCH_TIMEOUT_MS
+      );
+
+      const showBusyProcessing = () => {
+        card.classList.remove('error');
+        fill.style.width = '100%';
+        fill.style.background = 'var(--gold)';
+        pct.textContent = lastProcessingStage;
+        speed.textContent = '';
+        eta.textContent = 'Still working — server busy converting…';
+      };
 
       const showPollRetry = () => {
+        if (lastKnownStatus === 'processing') {
+          showBusyProcessing();
+          return;
+        }
         card.classList.remove('error');
         pct.textContent = 'Reconnecting…';
         speed.textContent = '';
@@ -870,7 +891,7 @@ if (urlInput) {
         if (cancelled) { clearInterval(poll); return; }
         try {
           const controller = new AbortController();
-          const fetchTimeout = setTimeout(() => controller.abort(), POLL_FETCH_TIMEOUT_MS);
+          const fetchTimeout = setTimeout(() => controller.abort(), pollTimeoutMs());
           let pres;
           try {
             pres = await fetch(`/api/progress/${jobId}`, { signal: controller.signal });
@@ -888,6 +909,10 @@ if (urlInput) {
               return;
             }
             pollFailures++;
+            if (pollFailures < RECONNECT_THRESHOLD) {
+              if (lastKnownStatus === 'processing') showBusyProcessing();
+              return;
+            }
             if (pollFailures >= MAX_POLL_FAILURES) {
               showPollFatal();
               return;
@@ -896,6 +921,7 @@ if (urlInput) {
             return;
           }
           pollFailures = 0;
+          lastKnownStatus = p.status;
           if (p.status === 'queued') {
             card.classList.add('queued');
             pct.textContent = p.queue_position ? `Queued (#${p.queue_position})` : 'Queued…';
@@ -908,7 +934,8 @@ if (urlInput) {
             eta.textContent = '';
           } else if (p.status === 'processing') {
             card.classList.remove('queued');
-            const stage = p.processing_stage || 'Preparing for iPhone…';
+            const stage = p.processing_stage || 'Converting for phones…';
+            lastProcessingStage = stage;
             const procPct = p.processing_percent;
             if (procPct != null && procPct > 0) {
               fill.style.width = `${Math.min(procPct, 99)}%`;
@@ -942,9 +969,12 @@ if (urlInput) {
             cancelBtn.classList.add('save-btn');
             toast(`${label} ready`, 'success');
             saveHistory({ title: label, url: payload.url, time: Date.now() });
-            mountJobPlayer(card, downloadUrl, payload.type).then((cache) => {
-              if (cache) fileCache = cache;
-            });
+            // Defer player prefetch so other jobs' progress polls keep getting worker time.
+            setTimeout(() => {
+              mountJobPlayer(card, downloadUrl, payload.type).then((cache) => {
+                if (cache) fileCache = cache;
+              });
+            }, 250);
             if (!isMobileDevice()) triggerFileDownload(downloadUrl, fileCache);
           } else if (p.status === 'error') {
             clearInterval(poll);
@@ -956,6 +986,10 @@ if (urlInput) {
           }
         } catch (e) {
           pollFailures++;
+          if (pollFailures < RECONNECT_THRESHOLD) {
+            if (lastKnownStatus === 'processing') showBusyProcessing();
+            return;
+          }
           if (pollFailures < MAX_POLL_FAILURES) {
             showPollRetry();
             return;

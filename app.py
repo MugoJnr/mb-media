@@ -70,6 +70,8 @@ MAX_DURATION_SECONDS = int(os.environ.get("MAX_DURATION_SECONDS", 3 * 3600))  # 
 MAX_FILESIZE_MB = int(os.environ.get("MAX_FILESIZE_MB", 2000))  # 2 GB
 # Cap ffmpeg post-process so free-tier hosts do not spin forever on HEVC→H.264.
 TRANSCODE_TIMEOUT = int(os.environ.get("TRANSCODE_TIMEOUT", 600))  # 10 minutes
+# Scale down during phone transcode — 720p H.264 on free CPU beats 1080p/4K waits.
+TRANSCODE_MAX_HEIGHT = int(os.environ.get("TRANSCODE_MAX_HEIGHT", 720))
 
 COOKIES_DIR = os.path.join(DATA_DIR, "cookies")
 os.makedirs(COOKIES_DIR, exist_ok=True)
@@ -1059,11 +1061,18 @@ def _probe_media_file(path):
                 duration = float(video.get("duration") or 0) or None
             except (TypeError, ValueError):
                 duration = None
+        height = None
+        if video:
+            try:
+                height = int(video.get("height") or 0) or None
+            except (TypeError, ValueError):
+                height = None
         return {
             "vcodec": (video or {}).get("codec_name"),
             "acodec": (audio or {}).get("codec_name"),
             "has_audio": audio is not None,
             "duration": duration,
+            "height": height,
         }
     except Exception:
         return None
@@ -1096,19 +1105,33 @@ def _mp4_faststart(path, job_id=None):
         raise
 
 
+def _transcode_vf_filter(info):
+    """Cap output height during phone transcode so free-tier CPU finishes in minutes."""
+    height = (info or {}).get("height")
+    if height and height > TRANSCODE_MAX_HEIGHT:
+        return f"scale=-2:{TRANSCODE_MAX_HEIGHT}"
+    return None
+
+
 def _transcode_to_ios_mp4(src_path, job_id=None):
     """Re-encode to H.264 + AAC MP4 when remux left incompatible codecs."""
     info = _probe_media_file(src_path)
     duration = (info or {}).get("duration")
     base, _ = os.path.splitext(src_path)
     dest = base + "_ios.mp4"
+    vf = _transcode_vf_filter(info)
+    stage = "Converting for phones…"
+    if vf:
+        stage = f"Converting for phones ({TRANSCODE_MAX_HEIGHT}p)…"
     cmd = ["ffmpeg", "-y", "-i", src_path, "-map", "0:v:0"]
+    if vf:
+        cmd.extend(["-vf", vf])
     if info and info.get("has_audio"):
         cmd.extend(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"])
     else:
         cmd.append("-an")
     cmd.extend([
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         dest,
@@ -1117,7 +1140,7 @@ def _transcode_to_ios_mp4(src_path, job_id=None):
         cmd,
         timeout=TRANSCODE_TIMEOUT,
         job_id=job_id,
-        stage="Preparing for iPhone…",
+        stage=stage,
         duration_sec=duration,
     )
     os.remove(src_path)
@@ -1260,17 +1283,25 @@ def _pick_info_formats(raw_formats, platform=None):
         entry["height"] = height
         candidates.append(entry)
 
-    def score(f):
-        h = f.get("height") or 0
+    def quality_score(f):
         h264 = 3 if _vcodec_is_h264(f.get("vcodec")) else 0
         aac = 2 if _acodec_is_aac(f.get("acodec")) else 0
         has_aud = 2 if _format_has_audio(f) else 0
         mp4 = 1 if (f.get("ext") or "").lower() == "mp4" else 0
         hls_penalty = -3 if _is_hls_format(f) else 0
         tiktok_dl = 4 if pkey == "tiktok" and str(f.get("format_id") or "") == "download" else 0
-        return (h, h264 + aac + has_aud + mp4 + tiktok_dl + hls_penalty)
+        ig_progressive = 0
+        if pkey == "instagram":
+            proto = (f.get("protocol") or "").lower()
+            if proto in ("https", "http") and not _is_hls_format(f) and _format_has_audio(f):
+                ig_progressive = 4
+        return h264 + aac + has_aud + mp4 + tiktok_dl + ig_progressive + hls_penalty
 
-    candidates.sort(key=score, reverse=True)
+    def pick_score(f):
+        h = f.get("height") or 0
+        return (quality_score(f), h)
+
+    candidates.sort(key=pick_score, reverse=True)
 
     formats = []
     seen_heights = set()
@@ -1279,7 +1310,7 @@ def _pick_info_formats(raw_formats, platform=None):
         if height in seen_heights:
             continue
         same_h = [x for x in candidates if x.get("height") == height]
-        pick = max(same_h, key=score)
+        pick = max(same_h, key=pick_score)
         seen_heights.add(height)
         ext = pick.get("ext") or "mp4"
         has_audio = _format_has_audio(pick)
@@ -1299,6 +1330,9 @@ def _pick_info_formats(raw_formats, platform=None):
         })
         if len(formats) >= 8:
             break
+
+    # Surface phone-ready options first so the default picker avoids slow transcodes.
+    formats.sort(key=lambda x: (x["compatible"], x["height"]), reverse=True)
     return formats
 
 
@@ -1365,7 +1399,7 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
             with JOBS_LOCK:
                 if JOBS.get(job_id):
                     JOBS[job_id]["status"] = "processing"
-                    JOBS[job_id]["processing_stage"] = "Preparing for iPhone…"
+                    JOBS[job_id]["processing_stage"] = "Converting for phones…"
                     JOBS[job_id]["processing_percent"] = 0
             filepath = _ensure_ios_playable_mp4(os.path.join(job_dir, filename), job_id=job_id)
             filename = os.path.basename(filepath)
