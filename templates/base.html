@@ -48,7 +48,7 @@
       <li><a href="/about" data-nav="about">About</a></li>
     </ul>
     <div class="nav-actions">
-      <button class="theme-toggle" id="cookiesBtn" aria-label="Upload cookies file" title="Upload cookies.txt for private/age-gated content">🍪</button>
+      <button class="theme-toggle" id="cookiesBtn" aria-label="Upload cookies file" title="Optional: upload cookies.txt for private or blocked content">🍪</button>
       <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">🌙</button>
       <button class="hamburger" id="hamburger" aria-label="Open menu">☰</button>
     </div>
@@ -68,9 +68,19 @@
 
 <div id="cookiesModal" class="modal-overlay" style="display:none;">
   <div class="modal-panel" role="dialog" aria-labelledby="cookiesModalTitle" aria-modal="true">
-    <h3 id="cookiesModalTitle">Upload cookies.txt</h3>
-    <p class="modal-copy">YouTube/Instagram/TikTok sometimes block cloud servers. Export a Netscape cookies.txt from your browser, upload it here, and we will use it for your session only (auto-deletes after 6 hours).</p>
-    <input type="file" id="cookiesFileInput" accept=".txt" class="modal-file">
+    <h3 id="cookiesModalTitle">Cookies (optional)</h3>
+    <p class="modal-copy"><strong>Most people can skip this.</strong> Normal public downloads do not need your cookies. Upload only if a video fails because it is private, age-gated, or the site keeps blocking the request.</p>
+    <div class="modal-steps">
+      <p class="modal-steps-title">How to export cookies.txt</p>
+      <ol>
+        <li>Install a browser extension that exports <strong>Netscape cookies.txt</strong> (Chrome/Edge: “Get cookies.txt LOCALLY”; Firefox: “cookies.txt”).</li>
+        <li>Open the site in your browser and log in (YouTube, Instagram, etc.).</li>
+        <li>On that site’s tab, use the extension → <strong>Export</strong> / <strong>Download</strong> as <code>cookies.txt</code>.</li>
+        <li>Upload that file below. We use it only for your browser session and auto-delete it after 6 hours.</li>
+      </ol>
+      <p class="modal-note">Never share your cookies file — it can give access to your logged-in account.</p>
+    </div>
+    <input type="file" id="cookiesFileInput" accept=".txt,text/plain" class="modal-file" aria-label="Choose cookies.txt file">
     <div class="modal-actions">
       <button class="btn btn-gold" id="cookiesUploadConfirm">Upload</button>
       <button class="btn btn-ghost" id="cookiesModalClose">Cancel</button>

@@ -1033,7 +1033,7 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 24px;
-  max-width: 420px;
+  max-width: 480px;
   width: 100%;
   max-height: min(90vh, 640px);
   overflow-y: auto;
@@ -1042,8 +1042,42 @@ a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible
 .modal-copy {
   color: var(--muted);
   font-size: 0.85rem;
-  margin: 0 0 16px;
+  margin: 0 0 14px;
   line-height: 1.5;
+}
+.modal-copy strong { color: var(--text); font-weight: 600; }
+.modal-steps {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  margin-bottom: 14px;
+}
+.modal-steps-title {
+  margin: 0 0 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.modal-steps ol {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+.modal-steps li { margin-bottom: 6px; }
+.modal-steps li:last-child { margin-bottom: 0; }
+.modal-steps code {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.75rem;
+  color: var(--gold);
+}
+.modal-note {
+  margin: 10px 0 0;
+  font-size: 0.75rem;
+  color: var(--error);
+  line-height: 1.4;
 }
 .modal-file {
   width: 100%;
