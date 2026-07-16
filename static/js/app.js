@@ -819,17 +819,57 @@ if (urlInput) {
       }
 
       const jobId = data.job_id;
+      const POLL_INTERVAL_MS = 1000;
+      const POLL_FETCH_TIMEOUT_MS = 12000;
+      const MAX_POLL_FAILURES = 25;
+      let pollFailures = 0;
+
+      const showPollRetry = () => {
+        card.classList.remove('error');
+        pct.textContent = 'Reconnecting…';
+        speed.textContent = '';
+        eta.textContent = 'Keep this tab open';
+      };
+
+      const showPollFatal = () => {
+        clearInterval(poll);
+        card.classList.add('error');
+        pct.textContent = 'Connection lost';
+        speed.textContent = '';
+        eta.textContent = 'Refresh and try again';
+        toast('Lost connection — refresh and retry', 'error');
+      };
+
       poll = setInterval(async () => {
         if (cancelled) { clearInterval(poll); return; }
         try {
-          const pres = await fetch(`/api/progress/${jobId}`);
+          const controller = new AbortController();
+          const fetchTimeout = setTimeout(() => controller.abort(), POLL_FETCH_TIMEOUT_MS);
+          let pres;
+          try {
+            pres = await fetch(`/api/progress/${jobId}`, { signal: controller.signal });
+          } finally {
+            clearTimeout(fetchTimeout);
+          }
           const p = await pres.json();
           if (!pres.ok) {
-            clearInterval(poll);
-            card.classList.add('error');
-            pct.textContent = p.error || 'Job not found';
+            if (pres.status === 404) {
+              clearInterval(poll);
+              card.classList.add('error');
+              pct.textContent = p.error || 'Job not found';
+              speed.textContent = '';
+              eta.textContent = '';
+              return;
+            }
+            pollFailures++;
+            if (pollFailures >= MAX_POLL_FAILURES) {
+              showPollFatal();
+              return;
+            }
+            showPollRetry();
             return;
           }
+          pollFailures = 0;
           if (p.status === 'queued') {
             card.classList.add('queued');
             pct.textContent = p.queue_position ? `Queued (#${p.queue_position})` : 'Queued…';
@@ -889,13 +929,14 @@ if (urlInput) {
             toast(`${label} failed`, 'error');
           }
         } catch (e) {
-          clearInterval(poll);
-          card.classList.add('error');
-          pct.textContent = 'Connection lost';
-          speed.textContent = '';
-          eta.textContent = '';
+          pollFailures++;
+          if (pollFailures < MAX_POLL_FAILURES) {
+            showPollRetry();
+            return;
+          }
+          showPollFatal();
         }
-      }, 1000);
+      }, POLL_INTERVAL_MS);
     } catch (e) {
       card.classList.add('error');
       pct.textContent = 'Network error';

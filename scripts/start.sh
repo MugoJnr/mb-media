@@ -40,6 +40,6 @@ start_pot_server
 
 exec gunicorn app:app \
   --bind "0.0.0.0:${PORT:-5000}" \
-  --timeout 300 \
+  --timeout 660 \
   --workers 1 \
   --keep-alive 5
