@@ -250,7 +250,7 @@ img { max-width: 100%; display: block; }
 /* ---------- Hero ---------- */
 .hero {
   position: relative;
-  padding: 90px 0 60px;
+  padding: 72px 0 56px;
   overflow: hidden;
   text-align: center;
 }
@@ -264,34 +264,29 @@ img { max-width: 100%; display: block; }
   z-index: 0;
 }
 .hero > * { position: relative; z-index: 1; }
-.eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.78rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--gold);
-  background: color-mix(in srgb, var(--gold) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--gold) 35%, transparent);
-  padding: 6px 14px;
-  border-radius: 999px;
-  margin-bottom: 22px;
-  animation: fadeUp 0.6s ease both;
+.hero-brand {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  margin: 0 auto 10px;
+  color: var(--text);
+  animation: fadeUp 0.5s ease both;
 }
+.hero-brand .dot { color: var(--gold); }
 .hero h1 {
-  font-size: clamp(2.1rem, 5vw, 3.4rem);
-  max-width: 780px;
-  margin: 0 auto 14px;
-  animation: fadeUp 0.6s ease 0.1s both;
+  font-size: clamp(1.55rem, 3.8vw, 2.4rem);
+  max-width: 720px;
+  margin: 0 auto 10px;
+  animation: fadeUp 0.5s ease 0.05s both;
 }
 .hero h1 .accent { color: var(--gold); }
 .hero p.tagline {
   color: var(--muted);
-  font-size: 1.05rem;
-  max-width: 520px;
-  margin: 0 auto 22px;
-  animation: fadeUp 0.6s ease 0.2s both;
+  font-size: 1rem;
+  max-width: 440px;
+  margin: 0 auto 20px;
+  animation: fadeUp 0.5s ease 0.1s both;
 }
 
 .status-banner {
@@ -299,13 +294,13 @@ img { max-width: 100%; display: block; }
   align-items: flex-start;
   gap: 12px;
   max-width: 620px;
-  margin: 0 auto 28px;
-  padding: 12px 14px;
+  margin: 18px auto 0;
+  padding: 10px 12px;
   text-align: left;
   background: color-mix(in srgb, var(--gold) 10%, var(--surface));
   border: 1px solid color-mix(in srgb, var(--gold) 40%, var(--border));
   border-radius: var(--radius-sm);
-  animation: fadeUp 0.6s ease 0.25s both;
+  animation: fadeUp 0.5s ease 0.2s both;
 }
 .status-banner-label {
   flex-shrink: 0;
@@ -323,14 +318,15 @@ img { max-width: 100%; display: block; }
 .status-banner p {
   margin: 0;
   color: var(--text);
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   line-height: 1.45;
 }
 @media (max-width: 560px) {
   .status-banner {
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 22px;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 10px;
+    margin-top: 14px;
   }
 }
 
@@ -341,15 +337,15 @@ img { max-width: 100%; display: block; }
 
 /* ---------- Convergence input bar (signature element) ---------- */
 .converge {
-  max-width: 620px;
+  max-width: 640px;
   margin: 0 auto;
-  animation: fadeUp 0.6s ease 0.3s both;
+  animation: fadeUp 0.5s ease 0.15s both;
 }
 .platform-orbit {
   display: flex;
   justify-content: center;
   gap: 18px;
-  margin-bottom: 18px;
+  margin-top: 22px;
 }
 .platform-orbit .glyph {
   width: 34px; height: 34px;
@@ -386,18 +382,30 @@ img { max-width: 100%; display: block; }
   background: transparent;
   border: none;
   color: var(--text);
-  padding: 12px 14px;
-  font-size: 0.95rem;
+  padding: 14px 16px;
+  font-size: 1rem;
   outline: none;
 }
 .input-bar input::placeholder { color: var(--muted); }
 .input-bar .btn {
   flex-shrink: 0;
   align-self: stretch;
+  min-height: 48px;
+  padding-inline: 22px;
+}
+.hero-trust {
+  margin: 12px 0 0;
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
 }
 @media (max-width: 560px) {
-  .hero { padding: 56px 0 40px; }
-  .hero p.tagline { margin-bottom: 28px; }
+  .hero { padding: 28px 0 32px; }
+  .hero-brand { margin-bottom: 6px; font-size: 1.45rem; }
+  .hero h1 { font-size: 1.35rem; margin-bottom: 8px; }
+  .hero p.tagline { font-size: 0.92rem; margin-bottom: 14px; }
+  .hero-trust { font-size: 0.72rem; margin-top: 10px; }
   .converge { max-width: 100%; }
   .input-bar {
     flex-direction: column;
@@ -414,7 +422,7 @@ img { max-width: 100%; display: block; }
     padding: 14px 18px;
     min-height: 48px;
   }
-  .platform-orbit { gap: 10px; margin-bottom: 14px; }
+  .platform-orbit { display: none; }
   .preview-card,
   .download-manager,
   #previewSkeleton {

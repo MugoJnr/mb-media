@@ -3,33 +3,34 @@
 
 <section class="hero">
   <div class="container">
-    <span class="eyebrow">★ Free · No sign-up · No watermark</span>
+    <p class="hero-brand">MB<span class="dot">•</span>MEDIA</p>
     <h1>Download Smarter.<br><span class="accent">Faster. Better.</span></h1>
-    <p class="tagline">Paste a link from any supported platform, preview it instantly, and save it in the format and quality you want.</p>
-
-    <div class="status-banner" role="status">
-      <span class="status-banner-label">Notice</span>
-      <p>YouTube downloads may be down for now. TikTok, Instagram, and other platforms still work — check back soon for YouTube.</p>
-    </div>
+    <p class="tagline">Paste a link, preview it, download without watermark.</p>
 
     <div class="converge" id="downloader">
-      <div class="platform-orbit" aria-hidden="true">
-        <span class="glyph">▶</span>
-        <span class="glyph">♪</span>
-        <span class="glyph">◉</span>
-        <span class="glyph">𝕏</span>
-        <span class="glyph">f</span>
-      </div>
-
       <div class="input-bar">
-        <input type="text" id="urlInput" placeholder="Paste a video link here…" autocomplete="off" aria-label="Video URL">
+        <input type="text" id="urlInput" placeholder="Paste a video link here…" autocomplete="off" inputmode="url" enterkeyhint="go" aria-label="Video URL">
         <button class="btn btn-gold" id="fetchBtn">Download</button>
       </div>
       <div class="action-row">
-        <button id="pasteBtn">📋 Paste</button>
-        <button id="clipboardDetectBtn">🔎 Auto-detect clipboard</button>
+        <button type="button" id="pasteBtn">📋 Paste</button>
+        <button type="button" id="clipboardDetectBtn">🔎 Auto-detect</button>
       </div>
+      <p class="hero-trust">Free · No sign-up · No watermark</p>
       <div id="status" role="status" aria-live="polite"></div>
+    </div>
+
+    <div class="status-banner" role="status">
+      <span class="status-banner-label">Notice</span>
+      <p>YouTube may be limited right now. TikTok, Instagram, and others still work.</p>
+    </div>
+
+    <div class="platform-orbit" aria-hidden="true">
+      <span class="glyph">▶</span>
+      <span class="glyph">♪</span>
+      <span class="glyph">◉</span>
+      <span class="glyph">𝕏</span>
+      <span class="glyph">f</span>
     </div>
 
     <!-- Skeleton loading state -->
