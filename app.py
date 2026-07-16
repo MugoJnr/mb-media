@@ -70,8 +70,8 @@ MAX_DURATION_SECONDS = int(os.environ.get("MAX_DURATION_SECONDS", 3 * 3600))  # 
 MAX_FILESIZE_MB = int(os.environ.get("MAX_FILESIZE_MB", 2000))  # 2 GB
 # Cap ffmpeg post-process so free-tier hosts do not spin forever on HEVC→H.264.
 TRANSCODE_TIMEOUT = int(os.environ.get("TRANSCODE_TIMEOUT", 600))  # 10 minutes
-# Scale down during phone transcode — 720p H.264 on free CPU beats 1080p/4K waits.
-TRANSCODE_MAX_HEIGHT = int(os.environ.get("TRANSCODE_MAX_HEIGHT", 720))
+# Scale down during phone transcode — 540p ultrafast on free CPU beats long 1080p waits.
+TRANSCODE_MAX_HEIGHT = int(os.environ.get("TRANSCODE_MAX_HEIGHT", 540))
 
 COOKIES_DIR = os.path.join(DATA_DIR, "cookies")
 os.makedirs(COOKIES_DIR, exist_ok=True)
@@ -884,7 +884,7 @@ def make_progress_hook(job_id):
                 job["eta"] = ""
                 if job.get("kind") == "video":
                     job["status"] = "processing"
-                    job["processing_stage"] = "Finalizing download…"
+                    job["processing_stage"] = "Preparing for phones…"
                     job["processing_percent"] = 0
     return hook
 
@@ -984,8 +984,43 @@ def _update_job_processing(job_id, *, stage=None, percent=None):
             job["processing_percent"] = round(min(99.0, max(0.0, percent)), 1)
 
 
+def _ffmpeg_input_path(cmd):
+    try:
+        idx = cmd.index("-i")
+        return cmd[idx + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def _ffmpeg_cmd_with_progress(cmd):
+    """Insert -progress pipe:1 so ffmpeg emits structured out_time_ms lines."""
+    if not cmd or cmd[0] != "ffmpeg":
+        return cmd
+    flags = ["-hide_banner", "-nostats", "-progress", "pipe:1"]
+    return [cmd[0], *flags, *cmd[1:]]
+
+
+def _parse_ffmpeg_progress_line(line, duration_sec):
+    """Return 0–99 percent from an ffmpeg progress or stderr status line."""
+    if not duration_sec or duration_sec <= 0:
+        return None
+    m = re.search(r"out_time_ms=(\d+)", line)
+    if m:
+        elapsed = int(m.group(1)) / 1_000_000.0
+        return (elapsed / duration_sec) * 100
+    m = re.search(r"out_time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
+    if m:
+        elapsed = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+        return (elapsed / duration_sec) * 100
+    m = re.search(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)", line)
+    if m:
+        elapsed = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+        return (elapsed / duration_sec) * 100
+    return None
+
+
 def _run_ffmpeg(cmd, *, timeout=1800, job_id=None, stage="Processing…", duration_sec=None):
-    """Run ffmpeg; when job_id is set, stream stderr progress into the job poll API."""
+    """Run ffmpeg; when job_id is set, stream -progress pipe:1 into the job poll API."""
     if not job_id:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
@@ -993,39 +1028,63 @@ def _run_ffmpeg(cmd, *, timeout=1800, job_id=None, stage="Processing…", durati
             raise RuntimeError(tail)
         return result
 
+    if not duration_sec or duration_sec <= 0:
+        src = _ffmpeg_input_path(cmd)
+        if src and os.path.isfile(src):
+            probe = _probe_media_file(src)
+            duration_sec = (probe or {}).get("duration")
+
+    progress_cmd = _ffmpeg_cmd_with_progress(cmd)
     _update_job_processing(job_id, stage=stage, percent=0)
     proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.DEVNULL,
+        progress_cmd,
+        stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,
     )
-    time_re = re.compile(r"time=(\d+):(\d+):(\d+(?:\.\d+)?)")
     err_lines = []
+    last_pct = [-1.0]
+
+    def _emit_progress(line):
+        pct = _parse_ffmpeg_progress_line(line, duration_sec)
+        if pct is None:
+            return
+        if pct - last_pct[0] >= 0.4 or pct >= 99.0:
+            last_pct[0] = pct
+            _update_job_processing(job_id, stage=stage, percent=pct)
+
+    def _stdout_reader():
+        try:
+            for line in proc.stdout:
+                if "progress=end" in line:
+                    _update_job_processing(job_id, stage=stage, percent=99)
+                _emit_progress(line)
+        except Exception:
+            pass
 
     def _stderr_reader():
         try:
             for line in proc.stderr:
                 err_lines.append(line)
-                if duration_sec and duration_sec > 0:
-                    m = time_re.search(line)
-                    if m:
-                        elapsed = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-                        pct = (elapsed / duration_sec) * 100
-                        _update_job_processing(job_id, stage=stage, percent=pct)
+                _emit_progress(line)
         except Exception:
             pass
 
-    reader = threading.Thread(target=_stderr_reader, daemon=True)
-    reader.start()
+    readers = [
+        threading.Thread(target=_stdout_reader, daemon=True),
+        threading.Thread(target=_stderr_reader, daemon=True),
+    ]
+    for t in readers:
+        t.start()
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=5)
         raise RuntimeError(f"{stage} timed out after {timeout // 60} min — try 720p or phone-friendly quality.")
-    reader.join(timeout=2)
+    for t in readers:
+        t.join(timeout=2)
     if proc.returncode != 0:
         tail = "".join(err_lines)[-500:]
         raise RuntimeError(tail or "ffmpeg failed")
@@ -1120,22 +1179,31 @@ def _transcode_to_ios_mp4(src_path, job_id=None):
     base, _ = os.path.splitext(src_path)
     dest = base + "_ios.mp4"
     vf = _transcode_vf_filter(info)
+    h264 = info and _vcodec_is_h264(info.get("vcodec"))
+    has_audio = info and info.get("has_audio")
+    aac_ok = info and _acodec_is_aac(info.get("acodec"))
     stage = "Converting for phones…"
     if vf:
         stage = f"Converting for phones ({TRANSCODE_MAX_HEIGHT}p)…"
     cmd = ["ffmpeg", "-y", "-i", src_path, "-map", "0:v:0"]
-    if vf:
-        cmd.extend(["-vf", vf])
-    if info and info.get("has_audio"):
-        cmd.extend(["-map", "0:a:0?", "-c:a", "aac", "-b:a", "128k"])
+    if h264 and not vf:
+        cmd.extend(["-c:v", "copy"])
+    else:
+        if vf:
+            cmd.extend(["-vf", vf])
+        cmd.extend([
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-pix_fmt", "yuv420p",
+        ])
+    if has_audio:
+        cmd.extend(["-map", "0:a:0?"])
+        if aac_ok:
+            cmd.extend(["-c:a", "copy"])
+        else:
+            cmd.extend(["-c:a", "aac", "-b:a", "128k"])
     else:
         cmd.append("-an")
-    cmd.extend([
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        dest,
-    ])
+    cmd.extend(["-movflags", "+faststart", dest])
     _run_ffmpeg(
         cmd,
         timeout=TRANSCODE_TIMEOUT,
@@ -1220,12 +1288,14 @@ def _mobile_video_format_string(format_id=None, platform=None):
         )
     elif pkey == "instagram":
         auto = (
+            "best[ext=mp4][vcodec^=avc1][acodec!=none][height<=720]/"
+            "best[ext=mp4][vcodec*=avc1][acodec!=none][height<=720]/"
             "best[ext=mp4][vcodec^=avc1][acodec!=none][height<=1080]/"
             "best[ext=mp4][vcodec*=avc1][acodec!=none][height<=1080]/"
-            "best[ext=mp4][acodec!=none][height<=1080]/"
-            "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[ext=m4a]/"
-            "bestvideo[ext=mp4][height<=1080]+bestaudio/"
-            "best[height<=1080]/best"
+            "best[ext=mp4][acodec!=none][height<=720]/"
+            "bestvideo[vcodec^=avc1][height<=720]+bestaudio[ext=m4a]/"
+            "bestvideo[ext=mp4][height<=720]+bestaudio/"
+            "best[height<=720]/best"
         )
     elif pkey in ("x", "facebook", "vimeo", "dailymotion", "default"):
         auto = (

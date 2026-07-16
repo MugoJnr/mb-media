@@ -783,6 +783,7 @@ if (urlInput) {
   async function startDownload(payload, label) {
     const card = createJobCard(label);
     const fill = card.querySelector('.progress-fill');
+    const track = card.querySelector('.progress-track');
     const pct = card.querySelector('.pct');
     const speed = card.querySelector('.speed');
     const eta = card.querySelector('.eta');
@@ -853,18 +854,38 @@ if (urlInput) {
       let pollFailures = 0;
       let lastKnownStatus = null;
       let lastProcessingStage = 'Converting for phones…';
+      let lastProcessingPercent = null;
 
       const pollTimeoutMs = () => (
         lastKnownStatus === 'processing' ? POLL_FETCH_TIMEOUT_PROCESSING_MS : POLL_FETCH_TIMEOUT_MS
       );
 
-      const showBusyProcessing = () => {
-        card.classList.remove('error');
-        fill.style.width = '100%';
+      const showProcessingProgress = (stage, procPct) => {
+        card.classList.remove('queued', 'error');
         fill.style.background = 'var(--gold)';
-        pct.textContent = lastProcessingStage;
+        lastProcessingStage = stage;
+        if (procPct != null && !Number.isNaN(procPct)) {
+          lastProcessingPercent = procPct;
+          track.classList.remove('indeterminate');
+          const clamped = Math.min(Math.max(procPct, 0), 99);
+          fill.style.width = `${clamped}%`;
+          pct.textContent = `${stage} ${Math.round(clamped)}%`;
+        } else {
+          track.classList.add('indeterminate');
+          pct.textContent = stage;
+        }
         speed.textContent = '';
-        eta.textContent = 'Still working — server busy converting…';
+        eta.textContent = procPct != null && procPct > 0 ? 'Converting for phones…' : 'Starting convert…';
+      };
+
+      const showBusyProcessing = () => {
+        showProcessingProgress(
+          lastProcessingStage,
+          lastProcessingPercent != null ? lastProcessingPercent : null,
+        );
+        if (lastProcessingPercent == null) {
+          eta.textContent = 'Still working — server busy converting…';
+        }
       };
 
       const showPollRetry = () => {
@@ -933,23 +954,11 @@ if (urlInput) {
             speed.textContent = '';
             eta.textContent = '';
           } else if (p.status === 'processing') {
-            card.classList.remove('queued');
             const stage = p.processing_stage || 'Converting for phones…';
-            lastProcessingStage = stage;
-            const procPct = p.processing_percent;
-            if (procPct != null && procPct > 0) {
-              fill.style.width = `${Math.min(procPct, 99)}%`;
-              fill.style.background = 'var(--gold)';
-              pct.textContent = `${stage} ${Math.round(procPct)}%`;
-            } else {
-              fill.style.width = '100%';
-              fill.style.background = 'var(--gold)';
-              pct.textContent = stage;
-            }
-            speed.textContent = '';
-            eta.textContent = 'Converting for phones…';
+            showProcessingProgress(stage, p.processing_percent);
           } else if (p.status === 'downloading') {
             card.classList.remove('queued');
+            track.classList.remove('indeterminate');
             const pctVal = p.percent || 0;
             fill.style.width = `${pctVal}%`;
             fill.style.background = pctVal >= 90 ? 'var(--teal)' : 'var(--gold)';
@@ -960,6 +969,7 @@ if (urlInput) {
             clearInterval(poll);
             finished = true;
             downloadUrl = p.download_url;
+            track.classList.remove('indeterminate');
             fill.style.width = '100%';
             pct.textContent = '100%';
             speed.textContent = '';

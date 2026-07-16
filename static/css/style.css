@@ -690,12 +690,25 @@ audio.job-player {
   background: var(--surface-2);
   border-radius: 4px;
   overflow: hidden;
+  position: relative;
 }
 .progress-fill {
   height: 100%;
   background: var(--gold);
   width: 0%;
   transition: width 0.3s ease;
+}
+.progress-track.indeterminate .progress-fill {
+  width: 38% !important;
+  position: absolute;
+  left: 0;
+  top: 0;
+  transition: none;
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes progress-indeterminate {
+  0% { left: -38%; }
+  100% { left: 100%; }
 }
 .job-card.success .progress-fill { background: var(--success); }
 .job-card.error .progress-fill { background: var(--error); }
