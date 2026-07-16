@@ -6,11 +6,41 @@
 <meta name="theme-color" content="#0a0a0d">
 <title>{% block title %}MB MEDIA — Download Smarter. Faster. Better.{% endblock %}</title>
 <meta name="description" content="{% block description %}MB MEDIA lets you preview and download video or audio from YouTube, TikTok, Instagram, X, Facebook and more — fast, clean, and free.{% endblock %}">
+<meta name="robots" content="{% block robots %}index, follow, max-image-preview:large, max-snippet:-1{% endblock %}">
+<meta name="googlebot" content="index, follow">
+<meta name="author" content="MugoByte Technologies">
+<meta name="keywords" content="MB Media, video downloader, YouTube downloader, TikTok downloader, Instagram downloader, free media download, Mugobyte">
+<link rel="canonical" href="{% block canonical %}https://media.mugobyte.com/{% endblock %}">
 
-<meta property="og:title" content="MB MEDIA">
-<meta property="og:description" content="Download Smarter. Faster. Better.">
+<meta property="og:title" content="{% block og_title %}MB MEDIA — Download Smarter. Faster. Better.{% endblock %}">
+<meta property="og:description" content="{% block og_description %}Preview and download video or audio from YouTube, TikTok, Instagram, X, Facebook and more — fast, clean, and free.{% endblock %}">
 <meta property="og:type" content="website">
+<meta property="og:site_name" content="MB MEDIA">
+<meta property="og:locale" content="en_KE">
+<meta property="og:url" content="{% block og_url %}https://media.mugobyte.com/{% endblock %}">
+<meta property="og:image" content="https://media.mugobyte.com/static/brand/icon.png">
 <meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="MB MEDIA">
+<meta name="twitter:description" content="Download Smarter. Faster. Better.">
+<meta name="twitter:image" content="https://media.mugobyte.com/static/brand/icon.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebApplication",
+  "name": "MB MEDIA",
+  "url": "https://media.mugobyte.com/",
+  "applicationCategory": "MultimediaApplication",
+  "operatingSystem": "Web",
+  "offers": {"@type": "Offer", "price": "0", "priceCurrency": "KES"},
+  "description": "Free media downloader for YouTube, TikTok, Instagram, X, Facebook and more.",
+  "publisher": {
+    "@type": "Organization",
+    "name": "MugoByte Technologies",
+    "url": "https://www.mugobyte.com/"
+  }
+}
+</script>
 
 <link rel="icon" type="image/png" sizes="48x48" href="{{ url_for('static', filename='favicon.png') }}">
 <link rel="icon" type="image/png" sizes="192x192" href="{{ url_for('static', filename='brand/icon.png') }}">

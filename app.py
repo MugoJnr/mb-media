@@ -243,11 +243,61 @@ def rate_limited(e):
 
 # ---------- Static pages ----------
 CURRENT_YEAR = time.strftime("%Y")
+SITE_ORIGIN = os.environ.get("PUBLIC_SITE_URL", "https://media.mugobyte.com").rstrip("/")
 
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/robots.txt")
+def robots_txt():
+    body = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "\n"
+        "Disallow: /admin\n"
+        "Disallow: /admin/\n"
+        "Disallow: /api/\n"
+        "\n"
+        f"Sitemap: {SITE_ORIGIN}/sitemap.xml\n"
+    )
+    return body, 200, {"Content-Type": "text/plain; charset=utf-8"}
+
+
+@app.route("/sitemap.xml")
+def sitemap_xml():
+    today = time.strftime("%Y-%m-%d")
+    pages = [
+        ("/", "1.0", "weekly"),
+        ("/about", "0.7", "monthly"),
+        ("/contact", "0.8", "monthly"),
+        ("/donate", "0.5", "monthly"),
+        ("/history", "0.4", "monthly"),
+        ("/privacy", "0.3", "yearly"),
+        ("/terms", "0.3", "yearly"),
+        ("/cookies", "0.3", "yearly"),
+        ("/dmca", "0.3", "yearly"),
+    ]
+    urls = []
+    for path, priority, changefreq in pages:
+        loc = SITE_ORIGIN + path
+        urls.append(
+            "  <url>\n"
+            f"    <loc>{loc}</loc>\n"
+            f"    <lastmod>{today}</lastmod>\n"
+            f"    <changefreq>{changefreq}</changefreq>\n"
+            f"    <priority>{priority}</priority>\n"
+            "  </url>"
+        )
+    xml = (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + "\n".join(urls)
+        + "\n</urlset>\n"
+    )
+    return xml, 200, {"Content-Type": "application/xml; charset=utf-8"}
 
 
 @app.route("/about")
