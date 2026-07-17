@@ -1439,9 +1439,8 @@ def _formats_have_audio(formats):
 
 
 def _video_merge_postprocessors():
-    """Merge split DASH/HLS streams, then remux to MP4."""
+    """Remux to MP4; yt-dlp auto-adds FFmpegMerger when video+audio are separate."""
     return [
-        {"key": "FFmpegMerger"},
         {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
     ]
 
@@ -1477,12 +1476,12 @@ def _mobile_video_format_string(format_id=None, platform=None):
 
     if pkey == "tiktok":
         auto = (
-            "download/"
+            "download[acodec!=none]/download/"
             "best[ext=mp4][vcodec^=avc1][acodec!=none][height<=1080]/"
             "best[ext=mp4][vcodec*=avc1][acodec!=none][height<=1080]/"
             "best[ext=mp4][acodec!=none][height<=1080]/"
             "bestvideo[vcodec^=avc1][height<=1080]+bestaudio/"
-            "best[height<=1080]/best"
+            "best[acodec!=none][height<=1080]/bestvideo+bestaudio/best[acodec!=none]"
         )
     elif pkey == "instagram":
         auto = (
@@ -1493,7 +1492,7 @@ def _mobile_video_format_string(format_id=None, platform=None):
             "best[ext=mp4][acodec!=none][height<=720]/"
             "bestvideo[vcodec^=avc1][height<=720]+bestaudio[ext=m4a]/"
             "bestvideo[ext=mp4][height<=720]+bestaudio/"
-            "best[height<=720]/best"
+            "best[acodec!=none][height<=720]/bestvideo+bestaudio/best[acodec!=none]"
         )
     elif pkey in ("x", "facebook", "vimeo", "dailymotion", "default"):
         auto = (
@@ -1501,7 +1500,7 @@ def _mobile_video_format_string(format_id=None, platform=None):
             "best[ext=mp4][acodec!=none][height<=1080]/"
             "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
             "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
-            "best[ext=mp4][height<=1080]/best[height<=1080]/best"
+            "best[ext=mp4][acodec!=none][height<=1080]/bestvideo+bestaudio/best[acodec!=none]"
         )
     else:
         # YouTube (DASH-first)
@@ -1509,18 +1508,19 @@ def _mobile_video_format_string(format_id=None, platform=None):
             "bestvideo[vcodec^=avc1][height<=1080]+bestaudio[acodec^=mp4a]/"
             "bestvideo[vcodec*=avc1][height<=1080]+bestaudio[acodec*=mp4a]/"
             "bestvideo[ext=mp4][height<=1080]+bestaudio[ext=m4a]/"
-            "best[ext=mp4][height<=1080]/best[height<=1080]/best"
+            "best[ext=mp4][acodec!=none][height<=1080]/"
+            "best[acodec!=none][height<=1080]/bestvideo+bestaudio/best[acodec!=none]"
         )
 
     if not format_id:
         return auto
 
-    # Always merge audio before bare format_id — video-only DASH/HLS ids are silent.
+    # Prefer muxed stream when it already has audio; otherwise merge bestaudio.
     return (
+        f"{format_id}[acodec!=none]/"
         f"{format_id}+bestaudio[acodec^=mp4a]/"
         f"{format_id}+bestaudio[ext=m4a]/"
         f"{format_id}+bestaudio/"
-        f"{format_id}[acodec!=none]/"
         f"{auto}"
     )
 
@@ -1571,6 +1571,10 @@ def _pick_info_formats(raw_formats, platform=None):
             continue
         same_h = [x for x in candidates if x.get("height") == height]
         pick = max(same_h, key=pick_score)
+        if not _format_has_audio(pick):
+            muxed = [x for x in same_h if _format_has_audio(x)]
+            if muxed:
+                pick = max(muxed, key=pick_score)
         seen_heights.add(height)
         ext = pick.get("ext") or "mp4"
         has_audio = _format_has_audio(pick)
