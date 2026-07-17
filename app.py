@@ -1654,9 +1654,46 @@ def _ensure_video_has_audio(filepath, job_dir, url, cookiefile, platform, format
     if not _formats_have_audio(info.get("formats", [])):
         return filepath
 
-    app.logger.warning("Output missing audio — muxing bestaudio for %s", url)
+    app.logger.warning("Output missing audio — re-downloading with forced audio merge for %s", url)
     _update_job_processing(job_id, stage="Adding audio…", percent=0)
 
+    # Remove silent output so yt-dlp/merge cannot confuse sidecars.
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+    def build_merge_opts(clients):
+        opts = base_ydl_opts(cookiefile, noplaylist=True, player_clients=clients)
+        opts["outtmpl"] = os.path.join(job_dir, "%(title).80s.%(ext)s")
+        opts["progress_hooks"] = [make_progress_hook(job_id)]
+        forced = (
+            f"{format_id}+bestaudio[acodec^=mp4a]/" if format_id else ""
+        ) + (
+            f"{format_id}+bestaudio[ext=m4a]/" if format_id else ""
+        ) + (
+            f"{format_id}+bestaudio/" if format_id else ""
+        ) + _mobile_video_format_string(None, platform)
+        opts["format"] = forced
+        opts["merge_output_format"] = "mp4"
+        opts["format_sort"] = [
+            "hasvid", "hasaud", "vcodec:h264", "acodec:mp4a",
+            "ext:mp4:m4a", "proto:https", "res:1080", "size",
+        ]
+        opts["postprocessors"] = _video_merge_postprocessors()
+        return opts
+
+    try:
+        download_with_fallback(url, build_merge_opts)
+        filename = _pick_job_output_file(job_dir, "video")
+        merged_path = os.path.join(job_dir, filename)
+        merged_probe = _probe_media_file(merged_path)
+        if merged_probe and merged_probe.get("has_audio"):
+            return merged_path
+    except Exception as e:
+        app.logger.warning("Forced audio re-download failed: %s", e)
+
+    # Last resort: download audio only and mux with whatever video remains.
     audio_dir = os.path.join(job_dir, "_audio_tmp")
     os.makedirs(audio_dir, exist_ok=True)
     audio_tmpl = os.path.join(audio_dir, "%(id)s.%(ext)s")
@@ -1672,6 +1709,13 @@ def _ensure_video_has_audio(filepath, job_dir, url, cookiefile, platform, format
         audio_name = _pick_job_output_file(audio_dir, "audio")
         audio_path = os.path.join(audio_dir, audio_name)
         if not os.path.isfile(audio_path):
+            fallback = _pick_job_output_file(job_dir, "video")
+            return os.path.join(job_dir, fallback)
+
+        if not os.path.isfile(filepath):
+            filename = _pick_job_output_file(job_dir, "video")
+            filepath = os.path.join(job_dir, filename)
+        if not os.path.isfile(filepath):
             return filepath
 
         base, _ = os.path.splitext(filepath)
