@@ -1171,11 +1171,13 @@ def _probe_media_file(path):
         return None
 
 
-def _is_ios_playable(info):
+def _is_ios_playable(info, *, require_audio=False):
     """iPhone needs H.264 video and AAC audio (when audio exists) in MP4."""
     if not info or not info.get("vcodec"):
         return False
     if not _vcodec_is_h264(info["vcodec"]):
+        return False
+    if require_audio and not info.get("has_audio"):
         return False
     if info.get("has_audio") and not _acodec_is_aac(info["acodec"]):
         return False
@@ -1335,7 +1337,7 @@ def _prepare_video_fast_path(path):
         return path, True, None
 
     info = _probe_media_file(path)
-    phone_compatible = bool(info and _is_ios_playable(info))
+    phone_compatible = bool(info and _is_ios_playable(info, require_audio=True))
 
     if phone_compatible:
         try:
@@ -1432,6 +1434,18 @@ def _format_has_audio(f):
     return f.get("acodec") not in (None, "none")
 
 
+def _formats_have_audio(formats):
+    return any(_format_has_audio(f) for f in (formats or []))
+
+
+def _video_merge_postprocessors():
+    """Merge split DASH/HLS streams, then remux to MP4."""
+    return [
+        {"key": "FFmpegMerger"},
+        {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
+    ]
+
+
 def _is_hls_format(f):
     ext = (f.get("ext") or "").lower()
     proto = (f.get("protocol") or "").lower()
@@ -1501,20 +1515,12 @@ def _mobile_video_format_string(format_id=None, platform=None):
     if not format_id:
         return auto
 
-    # Progressive sites: try the picked stream as-is first (often already muxed).
-    if pkey in ("tiktok", "instagram", "x", "facebook", "vimeo", "dailymotion", "default"):
-        return (
-            f"{format_id}/"
-            f"{format_id}+bestaudio[acodec^=mp4a]/"
-            f"{format_id}+bestaudio[ext=m4a]/"
-            f"{format_id}+bestaudio/"
-            f"{auto}"
-        )
+    # Always merge audio before bare format_id — video-only DASH/HLS ids are silent.
     return (
         f"{format_id}+bestaudio[acodec^=mp4a]/"
         f"{format_id}+bestaudio[ext=m4a]/"
         f"{format_id}+bestaudio/"
-        f"{format_id}/"
+        f"{format_id}[acodec!=none]/"
         f"{auto}"
     )
 
@@ -1540,7 +1546,7 @@ def _pick_info_formats(raw_formats, platform=None):
     def quality_score(f):
         h264 = 3 if _vcodec_is_h264(f.get("vcodec")) else 0
         aac = 2 if _acodec_is_aac(f.get("acodec")) else 0
-        has_aud = 2 if _format_has_audio(f) else 0
+        has_aud = 4 if _format_has_audio(f) else -6
         mp4 = 1 if (f.get("ext") or "").lower() == "mp4" else 0
         hls_penalty = -3 if _is_hls_format(f) else 0
         tiktok_dl = 4 if pkey == "tiktok" and str(f.get("format_id") or "") == "download" else 0
@@ -1630,6 +1636,67 @@ def _pick_job_output_file(job_dir, kind):
     return max(pool, key=lambda e: e[0])[1]
 
 
+def _ensure_video_has_audio(filepath, job_dir, url, cookiefile, platform, format_id, job_id):
+    """If output is silent but the source has audio, mux in bestaudio."""
+    probe = _probe_media_file(filepath)
+    if not probe or probe.get("has_audio"):
+        return filepath
+
+    try:
+        info = extract_with_fallback(url, cookiefile, skip_download=True, noplaylist=True)
+    except Exception:
+        return filepath
+
+    if not _formats_have_audio(info.get("formats", [])):
+        return filepath
+
+    app.logger.warning("Output missing audio — muxing bestaudio for %s", url)
+    _update_job_processing(job_id, stage="Adding audio…", percent=0)
+
+    audio_dir = os.path.join(job_dir, "_audio_tmp")
+    os.makedirs(audio_dir, exist_ok=True)
+    audio_tmpl = os.path.join(audio_dir, "%(id)s.%(ext)s")
+
+    def build_audio_opts(clients):
+        opts = base_ydl_opts(cookiefile, noplaylist=True, player_clients=clients)
+        opts["outtmpl"] = audio_tmpl
+        opts["format"] = "bestaudio[ext=m4a]/bestaudio[acodec!=none]/bestaudio/best[acodec!=none]"
+        return opts
+
+    try:
+        download_with_fallback(url, build_audio_opts)
+        audio_name = _pick_job_output_file(audio_dir, "audio")
+        audio_path = os.path.join(audio_dir, audio_name)
+        if not os.path.isfile(audio_path):
+            return filepath
+
+        base, _ = os.path.splitext(filepath)
+        merged = base + "_merged.mp4"
+        duration = (probe or {}).get("duration")
+        _run_ffmpeg([
+            "ffmpeg", "-y", "-i", filepath, "-i", audio_path,
+            *_ffmpeg_thread_args(),
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-shortest", "-movflags", "+faststart",
+            merged,
+        ], timeout=TRANSCODE_TIMEOUT, job_id=job_id, stage="Adding audio…", duration_sec=duration)
+
+        merged_probe = _probe_media_file(merged)
+        if not merged_probe or not merged_probe.get("has_audio"):
+            if os.path.isfile(merged):
+                os.remove(merged)
+            return filepath
+
+        os.remove(filepath)
+        return merged
+    except Exception as e:
+        app.logger.warning("Audio mux fallback failed: %s", e)
+        return filepath
+    finally:
+        shutil.rmtree(audio_dir, ignore_errors=True)
+
+
 def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cookiefile, platform, convert_after=False):
     job_dir = os.path.join(DOWNLOAD_DIR, job_id)
     os.makedirs(job_dir, exist_ok=True)
@@ -1647,10 +1714,7 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
                 "hasvid", "hasaud", "vcodec:h264", "acodec:mp4a",
                 "ext:mp4:m4a", "proto:https", "res:1080", "size",
             ]
-            opts["postprocessors"] = [{
-                "key": "FFmpegVideoRemuxer",
-                "preferedformat": "mp4",
-            }]
+            opts["postprocessors"] = _video_merge_postprocessors()
         elif kind == "audio":
             opts["format"] = "bestaudio/best"
             opts["postprocessors"] = [{
@@ -1689,6 +1753,10 @@ def _do_download(job_id, url, kind, format_id, audio_quality, audio_format, cook
         phone_compatible = None
         if kind == "video":
             filepath = os.path.join(job_dir, filename)
+            filepath = _ensure_video_has_audio(
+                filepath, job_dir, url, cookiefile, platform, format_id, job_id,
+            )
+            filename = os.path.basename(filepath)
             if convert_after:
                 with JOBS_LOCK:
                     if JOBS.get(job_id):

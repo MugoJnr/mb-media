@@ -556,11 +556,13 @@ if (urlInput) {
     return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb.toFixed(1) + ' MB';
   }
 
-  /** Prefer highest-resolution H.264+AAC MP4; else fall back to best available (may convert). */
+  /** Prefer highest-resolution H.264+AAC MP4 with audio; else fall back to muxed options. */
   function pickDefaultVideoFormat(formats) {
     if (!formats || formats.length === 0) return null;
-    const phoneFriendly = formats.filter((f) => f.compatible);
-    if (phoneFriendly.length === 0) return formats[0].format_id;
+    const withAudio = formats.filter((f) => f.has_audio !== false);
+    const pool = withAudio.length ? withAudio : formats;
+    const phoneFriendly = pool.filter((f) => f.compatible);
+    if (phoneFriendly.length === 0) return pool[0].format_id;
     return phoneFriendly.reduce((best, f) => (f.height >= best.height ? f : best)).format_id;
   }
 
